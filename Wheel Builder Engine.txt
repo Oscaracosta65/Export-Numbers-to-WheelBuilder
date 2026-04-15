@@ -270,7 +270,7 @@ textarea{ min-height:92px; resize:vertical; }
 
 [[div class="le-hero"]]
   [[h1 id="leTitle"]]Wheel Builder[[/h1]]
-  [[p id="leLead"]]Loading wheel system… This tool runs on LottoExpert.net. Coverage diagnostics help you understand distribution, not promise outcomes.[[/p]]
+  [[p id="leLead"]]Loading wheel system... This tool runs on LottoExpert.net. Coverage diagnostics help you understand distribution, not promise outcomes.[[/p]]
   [[div class="le-chips" aria-label="Wheel spec"]]
     [[span class="le-chip"]]System: [[span id="leSystemId"]]-[[/span]][[/span]]
     [[span class="le-chip"]]Pick: [[span id="lePick"]]-[[/span]][[/span]]
@@ -949,7 +949,7 @@ function renderCoverageDiagnostics(){
     html += LT + 'div class="le-cov-small"' + GT + LT + 'strong' + GT + 'Least-covered pairs' + LT + '/strong' + GT + ' (lowest appearances across lines):' + LT + 'br' + GT;
     for (var u = 0; u < under.length; u++){
       var parts = under[u].key.split('|');
-      html += parts[0] + '–' + parts[1] + ' (' + under[u].count + ')' + (u < under.length - 1 ? ', ' : '');
+      html += parts[0] + '-' + parts[1] + ' (' + under[u].count + ')' + (u < under.length - 1 ? ', ' : '');
     }
     html += LT + '/div' + GT;
   }
@@ -1047,7 +1047,7 @@ function wireButtons(){
       maxNum = v;
       resetSelection();
       renderGrid();
-      setStatus('ok', 'Grid limited to 1–' + maxNum + '.');
+      setStatus('ok', 'Grid limited to 1-' + maxNum + '.');
     });
   }
 
@@ -1132,8 +1132,8 @@ function loadWheelFromJson(sysId){
     if (dom.assurance) { dom.assurance.textContent = String(norm.assuranceLabel); }
     if (dom.lines) { dom.lines.textContent = String(norm.combinationsCount); }
 
-    if (dom.title){ dom.title.textContent = norm.name ? norm.name : ('Wheel Builder • ' + sysIdLocal); }
-    if (dom.lead){ dom.lead.textContent = 'Select exactly ' + norm.requiredSelections + ' numbers, then generate combinations using this wheel’s template.'; }
+    if (dom.title){ dom.title.textContent = norm.name ? norm.name : ('Wheel Builder | ' + sysIdLocal); }
+    if (dom.lead){ dom.lead.textContent = 'Select exactly ' + norm.requiredSelections + ' numbers, then generate combinations using this wheel\'s template.'; }
 
     var titleText = (norm.name ? norm.name : ('Wheel ' + sysIdLocal)) + ' | Wheel Builder | LottoExpert';
     var descriptionText = 'Use the LottoExpert wheel builder to generate combinations for system ' + sysIdLocal + '. Select ' + norm.requiredSelections + ' numbers, review coverage diagnostics, copy, print, or download your wheel output.';
@@ -1160,7 +1160,7 @@ function loadWheelFromJson(sysId){
   }
 
   function fallbackFetch(){
-    setStatus('ok', 'Loading wheel system ' + sysId + '… (fallback mode)');
+    setStatus('ok', 'Loading wheel system ' + sysId + '... (fallback mode)');
     fetch(WHEELS_JSON_URL, {cache:'no-store'})
       .then(function(r){
         if (!r.ok){ throw new Error('HTTP ' + r.status + ' while loading wheels.json'); }
@@ -1202,7 +1202,7 @@ function loadWheelFromJson(sysId){
     worker.onmessage = function(ev){
       var msg = ev.data || {};
       if (!msg.ok){
-        setStatus('err', 'Worker load failed: ' + (msg.err || 'Unknown error') + ' (trying fallback…)');
+        setStatus('err', 'Worker load failed: ' + (msg.err || 'Unknown error') + ' (trying fallback...)');
         fallbackFetch();
         return;
       }
@@ -1248,5 +1248,4 @@ if (document.readyState === 'loading'){
 })();
 [[/script]]
 
-[[/div]]
 {/source}
