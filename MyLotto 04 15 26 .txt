@@ -3193,14 +3193,21 @@ if ($__sendPlayToWheel > 0) {
                     $q->set($db->quoteName('play_status') . " = 'wheeled'");
                 }
                 $db->setQuery($q);
-                try { $db->execute(); } catch (Exception $__swe) {}
+                try {
+                    $db->execute();
+                } catch (Exception $__swe) {
+                    error_log('[MLE] send_play_to_wheel usage update failed: ' . $__swe->getMessage());
+                }
             }
 
             $__wheelUrl = '/wheel-builder1?play_set_id=' . (int)$__playId . '&source=mylottoexpert';
             if ($__systemId > 0) {
                 $__wheelUrl .= '&system_id=' . (int)$__systemId;
             }
-            $__endpointUrl = \Joomla\CMS\Uri\Uri::getInstance()->toString(array('path')) . '?mle_action=play_set_payload';
+            $__endpointUri = \Joomla\CMS\Uri\Uri::getInstance(\Joomla\CMS\Uri\Uri::base());
+            $__endpointUri->setPath(\Joomla\CMS\Uri\Uri::getInstance()->toString(array('path')));
+            $__endpointUri->setVar('mle_action', 'play_set_payload');
+            $__endpointUrl = $__endpointUri->toString(array('path', 'query'));
             $__wheelUrl .= '&play_set_endpoint=' . rawurlencode($__endpointUrl);
             $app->redirect($__wheelUrl);
             exit;
@@ -8744,7 +8751,7 @@ h3.title { font-size: 1.5rem; }
     <div class="mle-start-here__header-left">
       <div class="mle-start-here__eyebrow">Start Here</div>
       <h3 class="mle-start-here__title">How to use this workspace</h3>
-      <p class="mle-start-here__subtitle">Review your lotteries, compare saved predictions, build a focused pool, and move approved sets into Numbers to Play.</p>
+      <p class="mle-start-here__subtitle">Review your lotteries, compare saved predictions, build a focused pool, and save approved sets into Numbers to Play.</p>
     </div>
     <span class="mle-start-here__badge">Beginner-friendly</span>
   </div>
@@ -13899,7 +13906,7 @@ $methodKeys = ['skip_hit','ai_prediction','mcmc_prediction','skai_prediction','h
               Numbers selected: <span data-sw-count-mains>0</span><?php if ($__swHasExtra): ?>&nbsp;&bull;&nbsp;<?php echo htmlspecialchars($__swExtraLabel, ENT_QUOTES); ?>: <span data-sw-count-extras>0</span><?php endif; ?>
             </div>
             <div style="font-size:0.88rem; color:#576574; margin:0.35rem 0 0.65rem;">
-              Build an actionable pool, then save it to Numbers to Play for reuse and Wheel Builder export.
+              Build an actionable pool, then save it to Numbers to Play for reuse, and Wheel Builder export.
             </div>
             <div class="sw-builder-pool" data-sw-pool aria-label="Your strategy numbers">
               <div class="sw-pool-empty" data-sw-pool-empty>Click a candidate above to add numbers here.</div>

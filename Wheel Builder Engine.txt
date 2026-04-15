@@ -298,7 +298,7 @@ textarea{ min-height:92px; resize:vertical; }
       [[div style="flex:1 1 180px"]]
         [[div class="le-label"]][[label for="leSystemInput"]]System ID[[/label]][[/div]]
         [[input id="leSystemInput" class="le-input" type="text" placeholder="Example: PB-5-15"]]
-        [[div class="le-muted"]]If no system was selected yet, enter a system_id and load it without losing imported numbers.[[/div]]
+        [[div class="le-muted"]]Enter a system_id to load a wheel system while preserving your imported numbers.[[/div]]
       [[/div]]
       [[div style="flex:0 0 auto"]]
         [[button id="leLoadSystemBtn" class="le-btn secondary" type="button"]]Load System[[/button]]
