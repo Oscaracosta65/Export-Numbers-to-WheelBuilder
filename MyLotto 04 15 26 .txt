@@ -2698,6 +2698,86 @@ if ($__mleAction === 'play_set_payload') {
     exit;
 }
 
+// --------------------------------------------------
+// Numbers to Play list endpoint for Wheel Builder picker
+// --------------------------------------------------
+if ($__mleAction === 'play_sets_list') {
+    $app->setHeader('Content-Type', 'application/json; charset=utf-8', true);
+    $app->setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0', true);
+    $app->setHeader('Pragma', 'no-cache', true);
+
+    $snCols2 = array();
+    try {
+        $snColsRaw2 = $db->getTableColumns('#__user_saved_numbers', false);
+        $snCols2 = is_array($snColsRaw2) ? array_keys($snColsRaw2) : array();
+    } catch (\Throwable $e) {
+        $snCols2 = array();
+    }
+
+    $q = $db->getQuery(true)
+        ->select(array(
+            $db->quoteName('id'),
+            $db->quoteName('label'),
+            $db->quoteName('lottery_id'),
+            $db->quoteName('main_numbers'),
+            $db->quoteName('extra_ball_numbers'),
+            $db->quoteName('date_saved'),
+            $db->quoteName('source')
+        ))
+        ->from($db->quoteName('#__user_saved_numbers'))
+        ->where($db->quoteName('user_id') . ' = ' . (int)$workspaceUserId);
+
+    if (in_array('origin_source', $snCols2, true)) {
+        $q->select($db->quoteName('origin_source'));
+    }
+    if (in_array('play_status', $snCols2, true)) {
+        $q->select($db->quoteName('play_status'));
+        $q->where($db->quoteName('play_status') . " <> 'archived'");
+    }
+    if (in_array('save_intent', $snCols2, true)) {
+        $q->where(
+            '(' .
+            $db->quoteName('save_intent') . " IN ('play_set','custom_play','wheel_candidate')" .
+            ' OR (' . $db->quoteName('save_intent') . " = '' AND " . $db->quoteName('source') . " = 'strategy_set')" .
+            ')'
+        );
+    } else {
+        $q->where($db->quoteName('source') . " = 'strategy_set'");
+    }
+    $q->order($db->quoteName('id') . ' DESC');
+    $db->setQuery($q, 0, 50);
+    $listRows = $db->loadAssocList() ?: array();
+
+    $listSets = array();
+    foreach ($listRows as $lRow) {
+        $lMain = mylottoexpertParseNumberCsv($lRow['main_numbers'] ?? '', true);
+        if (empty($lMain)) { continue; }
+        $lLabel = trim((string)($lRow['label'] ?? ''));
+        $lOrigin = strtolower(trim((string)($lRow['origin_source'] ?? $lRow['source'] ?? '')));
+        if (in_array($lOrigin, array('skai_prediction', 'prediction', 'ai_prediction'), true)) {
+            $lBadge = 'From Prediction';
+        } elseif (in_array($lOrigin, array('strategy_builder', 'strategy_set'), true) || ($lRow['source'] ?? '') === 'strategy_set') {
+            $lBadge = 'From Strategy Builder';
+        } elseif (in_array($lOrigin, array('manual', 'custom'), true)) {
+            $lBadge = 'Custom Selection';
+        } else {
+            $lBadge = 'Saved Set';
+        }
+        $lSavedTs = strtotime((string)($lRow['date_saved'] ?? ''));
+        $lSavedLabel = $lSavedTs ? date('M j, Y', $lSavedTs) : trim((string)($lRow['date_saved'] ?? ''));
+        $listSets[] = array(
+            'id'                 => (int)$lRow['id'],
+            'label'              => $lLabel !== '' ? $lLabel : ('Play Set #' . (int)$lRow['id']),
+            'main_numbers'       => $lMain,
+            'extra_ball_numbers' => mylottoexpertParseNumberCsv($lRow['extra_ball_numbers'] ?? '', true),
+            'source_badge'       => $lBadge,
+            'date_saved'         => $lSavedLabel,
+        );
+    }
+    echo json_encode(array('ok' => true, 'sets' => $listSets), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    exit;
+}
+
 // New Features toggle (persisted in #__user_profiles)
 // Stored as '1' (show) / '0' (hide).
 // We can safely call helpers before their textual definition (PHP parses file first).
@@ -3209,6 +3289,9 @@ if ($__sendPlayToWheel > 0) {
             $__endpointUri->setVar('mle_action', 'play_set_payload');
             $__endpointUrl = $__endpointUri->toString(array('path', 'query'));
             $__wheelUrl .= '&play_set_endpoint=' . rawurlencode($__endpointUrl);
+            $__endpointUri->setVar('mle_action', 'play_sets_list');
+            $__listEndpointUrl = $__endpointUri->toString(array('path', 'query'));
+            $__wheelUrl .= '&play_sets_endpoint=' . rawurlencode($__listEndpointUrl);
             $app->redirect($__wheelUrl);
             exit;
         }
@@ -8780,7 +8863,7 @@ h3.title { font-size: 1.5rem; }
         <div class="mle-start-here__step-num">3</div>
         <div class="mle-start-here__step-body">
           <strong>Approve your Numbers to Play</strong>
-          <span>Use the strategy area to refine your pool, save your final set into Numbers to Play, then send it to Wheel Builder when you are ready.</span>
+          <span>Use the strategy area to refine your numbers, save your final set into Numbers to Play, then open it in Wheel Builder to apply your selected wheel and generate combinations.</span>
         </div>
       </div>
 
@@ -13906,7 +13989,7 @@ $methodKeys = ['skip_hit','ai_prediction','mcmc_prediction','skai_prediction','h
               Numbers selected: <span data-sw-count-mains>0</span><?php if ($__swHasExtra): ?>&nbsp;&bull;&nbsp;<?php echo htmlspecialchars($__swExtraLabel, ENT_QUOTES); ?>: <span data-sw-count-extras>0</span><?php endif; ?>
             </div>
             <div style="font-size:0.88rem; color:#576574; margin:0.35rem 0 0.65rem;">
-              Build an actionable pool, then save it to Numbers to Play for reuse, and Wheel Builder export.
+              Build your number set here, then save it to Numbers to Play. Open in Wheel Builder when you are ready to apply a wheel and generate combinations.
             </div>
             <div class="sw-builder-pool" data-sw-pool aria-label="Your strategy numbers">
               <div class="sw-pool-empty" data-sw-pool-empty>Click a candidate above to add numbers here.</div>
@@ -17006,7 +17089,7 @@ if (!empty($settingLabels)) {
 <div class="mle-play-section" id="numbers-to-play">
   <div class="mle-play-section__head">
     <h2 class="mle-play-section__title">Numbers to Play</h2>
-    <p class="mle-play-section__sub">Your approved number sets for reuse, wheeling, and final decision making. Save from predictions, the strategy builder, or manual custom selection, then send to Wheel Builder when you are ready.</p>
+    <p class="mle-play-section__sub">Your saved number sets for wheeling and final play decisions. Save from predictions, the strategy builder, or manual custom selection. When your set is ready, open it in Wheel Builder to apply your selected wheel and generate combinations.</p>
   </div>
 
   <?php if (!empty($playSets)): ?>
@@ -17065,12 +17148,12 @@ if (!empty($settingLabels)) {
           <input type="hidden" name="send_play_to_wheel" value="1">
           <input type="hidden" name="play_set_id" value="<?php echo (int)$__play->id; ?>">
           <select name="play_system_id" class="mle-play-input" aria-label="Optional wheel system for send action">
-            <option value="0">Select wheel system (optional)</option>
+            <option value="0">No specific wheel yet (choose in Wheel Builder)</option>
             <?php foreach ($wheelingSystems as $__wsOpt): ?>
               <option value="<?php echo (int)($__wsOpt['system_id'] ?? 0); ?>"><?php echo htmlspecialchars((string)($__wsOpt['name'] ?? ('System ' . (int)($__wsOpt['system_id'] ?? 0))), ENT_QUOTES, 'UTF-8'); ?></option>
             <?php endforeach; ?>
           </select>
-          <button type="submit" class="btn-primary" style="font-size:0.78rem;">Send to Wheel Builder</button>
+          <button type="submit" class="btn-primary" style="font-size:0.78rem;">Open in Wheel Builder</button>
         </form>
 
         <form method="post">
@@ -17092,7 +17175,7 @@ if (!empty($settingLabels)) {
   </div>
   <?php else: ?>
   <div class="mle-play-empty">
-    No Numbers to Play entries yet. Save from a prediction using Save as Play, or build/select numbers in the Strategy Builder and click Save Play Set or Save Custom Selection.
+    No saved number sets yet. Use the Strategy Builder to build and save a set, or save directly from a prediction run. Once saved, open in Wheel Builder to apply your selected wheel and generate combinations.
   </div>
   <?php endif; ?>
 </div>

@@ -266,15 +266,67 @@ textarea{ min-height:92px; resize:vertical; }
 }
 
 @media (prefers-reduced-motion: reduce){ .le-btn, .le-input, .le-select{ transition:none !important; } }
+
+.le-count-guidance{
+  margin-top:10px;
+  padding:12px 14px;
+  border-radius:var(--r16);
+  border:1px solid var(--border);
+  background:rgba(239,239,245,.6);
+  font-size:13px;
+  line-height:1.55;
+  color:var(--deep-navy);
+  font-weight:700;
+}
+.le-count-guidance.ok{
+  background:rgba(32,201,151,.08);
+  border-color:rgba(32,201,151,.35);
+}
+.le-count-guidance.warn{
+  background:rgba(245,166,35,.08);
+  border-color:rgba(245,166,35,.35);
+}
+
+.le-play-picker-item{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  padding:10px 12px;
+  border:1px solid var(--border);
+  border-radius:var(--r12);
+  background:#fff;
+  margin-bottom:8px;
+  flex-wrap:wrap;
+}
+.le-play-picker-item:last-child{ margin-bottom:0; }
+.le-play-picker-item__body{ flex:1 1 180px; min-width:0; }
+.le-play-picker-item__name{ font-weight:900; font-size:13px; color:var(--deep-navy); }
+.le-play-picker-item__meta{ font-size:11px; color:var(--text-muted); margin-top:2px; }
+.le-play-picker-item__nums{ font-size:12px; color:var(--deep-navy); margin-top:4px; word-break:break-word; }
+.le-play-picker-item__badge{
+  display:inline-block;
+  padding:3px 8px;
+  border-radius:999px;
+  background:rgba(28,102,255,.10);
+  color:var(--skai-blue);
+  font-size:11px;
+  font-weight:900;
+}
+.le-play-picker-loading,.le-play-picker-empty{
+  font-size:13px;
+  color:var(--text-muted);
+  padding:8px 0;
+}
 [[/style]]
 
 [[div class="le-hero"]]
   [[h1 id="leTitle"]]Wheel Builder[[/h1]]
-  [[p id="leLead"]]Loading wheel system... This tool runs on LottoExpert.net. Coverage diagnostics help you understand distribution, not promise outcomes.[[/p]]
+  [[p id="leLead"]]Loading your wheel...[[/p]]
   [[div class="le-chips" aria-label="Wheel spec"]]
     [[span class="le-chip"]]System: [[span id="leSystemId"]]-[[/span]][[/span]]
     [[span class="le-chip"]]Pick: [[span id="lePick"]]-[[/span]][[/span]]
-    [[span class="le-chip"]]Pool: [[span id="lePool"]]-[[/span]][[/span]]
+    [[span class="le-chip"]]Needed: [[span id="lePool"]]-[[/span]][[/span]]
     [[span class="le-chip"]]Assurance: [[span id="leAssurance"]]-[[/span]][[/span]]
     [[span class="le-chip"]]Lines: [[span id="leLines"]]-[[/span]][[/span]]
   [[/div]]
@@ -282,8 +334,8 @@ textarea{ min-height:92px; resize:vertical; }
 
 [[div class="le-grid"]]
   [[div class="le-card"]]
-    [[div class="le-label"]]Step 1: Load or select your pool[[/div]]
-    [[div class="le-help"]]Choose exactly the required pool size for this wheel. You can select manually or load a play set imported from Numbers to Play.[[/div]]
+    [[div class="le-label"]]Choose your numbers for this wheel[[/div]]
+    [[div class="le-help"]]Your wheel is selected. Load a saved number set below, or pick numbers manually from the grid.[[/div]]
 
     [[div class="le-status" role="status" aria-live="polite"]]
       [[span class="le-dot" id="leDot" aria-hidden="true"]][[/span]]
@@ -291,25 +343,27 @@ textarea{ min-height:92px; resize:vertical; }
     [[/div]]
     [[div id="leImportState" class="le-status" style="display:none; margin-top:10px;" role="status" aria-live="polite"]]
       [[span class="le-dot ok" aria-hidden="true"]][[/span]]
-      [[div id="leImportStateText"]]Imported from Numbers to Play.[[/div]]
+      [[div id="leImportStateText"]]Loaded from Numbers to Play.[[/div]]
     [[/div]]
 
-    [[div class="le-row" style="margin-top:12px"]]
-      [[div style="flex:1 1 180px"]]
-        [[div class="le-label"]][[label for="leSystemInput"]]System ID[[/label]][[/div]]
-        [[input id="leSystemInput" class="le-input" type="text" placeholder="Example: PB-5-15"]]
-        [[div class="le-muted"]]Enter a system_id to load a wheel system while preserving your imported numbers.[[/div]]
-      [[/div]]
-      [[div style="flex:0 0 auto"]]
-        [[button id="leLoadSystemBtn" class="le-btn secondary" type="button"]]Load System[[/button]]
-      [[/div]]
+    [[div id="leCountGuidance" class="le-count-guidance" style="display:none;" role="status" aria-live="polite"]][[/div]]
+
+    [[div id="lePickerSection" style="margin-top:16px; display:none;"]]
+      [[div class="le-label"]]Load a saved number set[[/div]]
+      [[div class="le-help"]]Choose from your saved Numbers to Play, or pick numbers manually below.[[/div]]
+      [[div id="lePickerList" style="margin-top:8px;"]][[/div]]
     [[/div]]
 
-    [[div class="le-row" style="margin-top:12px"]]
+    [[div style="margin-top:16px"]]
+      [[div class="le-label"]]Pick numbers manually[[/div]]
+      [[div class="le-muted" style="margin-bottom:4px;"]]Click numbers in the grid below to add or remove them from your selection.[[/div]]
+    [[/div]]
+
+    [[div class="le-row" style="margin-top:10px"]]
       [[div style="flex:1 1 180px"]]
-        [[div class="le-label"]][[label for="leMax"]]Highest Lotto Number[[/label]][[/div]]
+        [[div class="le-label"]][[label for="leMax"]]Highest game number[[/label]][[/div]]
         [[select id="leMax" class="le-select"]][[/select]]
-        [[div class="le-muted"]]Limits the grid display (example: Powerball highest main is 69).[[/div]]
+        [[div class="le-muted"]]Match this to your game's highest number (example: 69 for Powerball).[[/div]]
       [[/div]]
 
       [[div style="flex:1 1 160px"]]
@@ -318,12 +372,11 @@ textarea{ min-height:92px; resize:vertical; }
           [[option value="0"]]No[[/option]]
           [[option value="1"]]Yes (daily games only)[[/option]]
         [[/select]]
-        [[div class="le-muted"]]Only enable 0 when your game range includes 0 (daily games).[[/div]]
+        [[div class="le-muted"]]Only enable for games that use 0 as a valid number.[[/div]]
       [[/div]]
     [[/div]]
 
     [[div class="le-row" style="margin-top:12px"]]
-      [[button id="leImportBtn" class="le-btn secondary" type="button"]]Import Numbers to Play[[/button]]
       [[button id="leRandomBtn" class="le-btn ghost" type="button"]]Random Select[[/button]]
       [[button id="leResetBtn" class="le-btn ghost" type="button"]]Reset Selection[[/button]]
     [[/div]]
@@ -331,13 +384,24 @@ textarea{ min-height:92px; resize:vertical; }
     [[div style="margin-top:12px"]]
       [[div class="le-label"]]Selected Numbers ([[span id="leCount"]]0[[/span]])[[/div]]
       [[textarea id="leSelected" aria-readonly="true" readonly]][[/textarea]]
-      [[div class="le-muted"]]You must select exactly [[span id="leReq"]]-[[/span]] numbers for this wheel to generate combinations.[[/div]]
     [[/div]]
 
     [[div id="leGrid" class="le-number-grid" role="group" aria-label="Number selection grid"]][[/div]]
 
-    [[div class="le-row" style="margin-top:12px"]]
-      [[button id="leCreateBtn" class="le-btn" type="button" disabled]]Create Wheel[[/button]]
+    [[div id="leChangeWheelSection" style="margin-top:20px; border-top:1px solid var(--border); padding-top:16px;"]]
+      [[div class="le-label"]]Need a different wheel?[[/div]]
+      [[div class="le-row" style="margin-top:8px"]]
+        [[div style="flex:1 1 180px"]]
+          [[input id="leSystemInput" class="le-input" type="text" placeholder="Enter system ID (example: PB-5-15)"]]
+        [[/div]]
+        [[div style="flex:0 0 auto"]]
+          [[button id="leLoadSystemBtn" class="le-btn secondary" type="button"]]Load Wheel[[/button]]
+        [[/div]]
+      [[/div]]
+    [[/div]]
+
+    [[div class="le-row" style="margin-top:16px"]]
+      [[button id="leCreateBtn" class="le-btn" type="button" disabled]]Generate Combinations[[/button]]
       [[button id="leDownloadBtn" class="le-btn ghost" type="button" disabled]]Download (.txt)[[/button]]
       [[button id="leCopyBtn" class="le-btn ghost" type="button" disabled]]Copy Wheel[[/button]]
       [[button id="lePrintBtn" class="le-btn ghost" type="button" disabled]]Print Wheel[[/button]]
@@ -357,8 +421,8 @@ textarea{ min-height:92px; resize:vertical; }
       [[div style="font-size:13px; color:#5B6B86; margin-top:6px;"]]Generated from LottoExpert.net wheel builder.[[/div]]
     [[/div]]
 
-    [[div class="le-label"]]Step 2: Wheel output[[/div]]
-    [[div class="le-help"]]Your generated combinations will appear here. Scrolling is enabled for long wheels.[[/div]]
+    [[div class="le-label"]]Combinations output[[/div]]
+    [[div class="le-help"]]Your generated combinations appear here. Click a number above to generate, then download, copy, or print your wheel.[[/div]]
 
     [[div id="leCoverage" class="le-coverage" aria-label="Coverage diagnostics"]][[/div]]
 
@@ -396,11 +460,14 @@ var dom = {
   status: document.getElementById('leStatusText'),
   importState: document.getElementById('leImportState'),
   importStateText: document.getElementById('leImportStateText'),
+  countGuidance: document.getElementById('leCountGuidance'),
+  pickerSection: document.getElementById('lePickerSection'),
+  pickerList: document.getElementById('lePickerList'),
   systemInput: document.getElementById('leSystemInput'),
   loadSystemBtn: document.getElementById('leLoadSystemBtn'),
   maxSel: document.getElementById('leMax'),
   zeroSel: document.getElementById('leIncludeZero'),
-  importBtn: document.getElementById('leImportBtn'),
+  importBtn: null,
   randomBtn: document.getElementById('leRandomBtn'),
   resetBtn: document.getElementById('leResetBtn'),
   createBtn: document.getElementById('leCreateBtn'),
@@ -408,7 +475,7 @@ var dom = {
   copyBtn: document.getElementById('leCopyBtn'),
   printBtn: document.getElementById('lePrintBtn'),
   count: document.getElementById('leCount'),
-  req: document.getElementById('leReq'),
+  req: null,
   selected: document.getElementById('leSelected'),
   grid: document.getElementById('leGrid'),
   outBody: document.getElementById('leOutTable') && document.getElementById('leOutTable').getElementsByTagName('tbody')[0],
@@ -429,6 +496,7 @@ var builtCombos = [];
 var copyResetTimer = null;
 var playSetId = 0;
 var playSetEndpoint = '/my-lottoexpert?mle_action=play_set_payload';
+var playSetListEndpoint = '/my-lottoexpert?mle_action=play_sets_list';
 var importedPayload = null;
 
 function qs(name){
@@ -479,6 +547,10 @@ function parseCsvNumbers(raw){
   return out;
 }
 
+function escHtml(s){
+  return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
 function applyImportedPayload(payload){
   var p = payload || {};
   var mains = Array.isArray(p.main_numbers) ? p.main_numbers : parseCsvNumbers(p.main_numbers);
@@ -495,8 +567,8 @@ function applyImportedPayload(payload){
   }
 
   if (!cleaned.length){
-    showImportedState('Imported play set is missing valid main numbers.', true);
-    setStatus('err', 'Imported play set is invalid or empty.');
+    showImportedState('This saved number set has no valid main numbers. Choose another set below or select manually.', true);
+    setStatus('err', 'Could not load the saved number set. Choose another set below or select numbers manually.');
     return false;
   }
 
@@ -543,13 +615,26 @@ function applyImportedPayload(payload){
     updateSelectionUI();
   }
 
+  // Build the import status message with clear next-action guidance
+  var req2 = wheel ? (parseInt(wheel.requiredSelections, 10) || 0) : 0;
+  var have2 = importedPayload.main_numbers.length;
+  var diff2 = req2 > 0 ? (req2 - have2) : 0;
+  var actionHint = '';
+  if (req2 > 0 && diff2 > 0) {
+    actionHint = ' Add ' + diff2 + ' more number' + (diff2 !== 1 ? 's' : '') + ' from the grid below to continue.';
+  } else if (req2 > 0 && diff2 < 0) {
+    var extra2 = -diff2;
+    actionHint = ' Remove ' + extra2 + ' number' + (extra2 !== 1 ? 's' : '') + ' from the grid below to continue.';
+  } else if (req2 > 0 && diff2 === 0) {
+    actionHint = ' Your set is ready. Click Generate Combinations.';
+  }
+  var setName = importedPayload.label ? importedPayload.label : ('Play Set #' + (importedPayload.play_set_id || ''));
   showImportedState(
-    'Imported from Numbers to Play: ' +
-    (importedPayload.label ? importedPayload.label : ('Play set #' + (importedPayload.play_set_id || ''))) +
-    ' (' + importedPayload.main_numbers.length + ' mains' +
-    (importedPayload.extra_ball_numbers.length ? (', ' + importedPayload.extra_ball_numbers.length + ' extras') : '') + ').',
+    'Loaded: ' + setName + ' - ' + have2 + ' number' + (have2 !== 1 ? 's' : '') + '.' + actionHint,
     false
   );
+  // Hide the picker since a set is now loaded
+  if (dom.pickerSection) { dom.pickerSection.style.display = 'none'; }
   return true;
 }
 
@@ -578,8 +663,8 @@ function importFromQueryParams(){
         return true;
       })
       .catch(function(err){
-        showImportedState('Import failed. ' + String(err && err.message ? err.message : err), true);
-        setStatus('err', 'Could not import Numbers to Play payload.');
+        showImportedState('Could not load the saved number set. ' + String(err && err.message ? err.message : err), true);
+        setStatus('err', 'Could not load the saved number set. Choose from the list below or select manually.');
         return false;
       });
   }
@@ -672,6 +757,102 @@ function applyBuilderSeo(titleText, descriptionText){
   setCanonical(HUB_URL);
 }
 
+function renderCountGuidance(){
+  var el = dom.countGuidance;
+  if (!el) { return; }
+  if (!wheel) {
+    el.style.display = 'none';
+    el.className = 'le-count-guidance';
+    el.textContent = '';
+    return;
+  }
+  var req = parseInt(wheel.requiredSelections, 10) || 0;
+  var have = selected.length;
+  var diff = req - have;
+  el.style.display = '';
+  if (have === 0 && req > 0) {
+    el.className = 'le-count-guidance';
+    el.textContent = 'This wheel needs ' + req + ' numbers. Select ' + req + ' numbers from the grid below to continue.';
+  } else if (diff > 0) {
+    el.className = 'le-count-guidance warn';
+    el.textContent = 'You have ' + have + ' of ' + req + ' needed. Add ' + diff + ' more number' + (diff !== 1 ? 's' : '') + ' to continue.';
+  } else if (diff < 0) {
+    var extra = -diff;
+    el.className = 'le-count-guidance warn';
+    el.textContent = 'You have ' + have + ' numbers, but this wheel needs ' + req + '. Remove ' + extra + ' number' + (extra !== 1 ? 's' : '') + ' to continue.';
+  } else {
+    el.className = 'le-count-guidance ok';
+    el.textContent = 'You have exactly ' + req + ' numbers. Your set is ready. Click Generate Combinations.';
+  }
+}
+
+function fetchPlaySets(){
+  if (!dom.pickerList) { return; }
+  if (dom.pickerSection) { dom.pickerSection.style.display = ''; }
+  dom.pickerList.innerHTML = '<div class="le-play-picker-loading">Loading your saved number sets...</div>';
+  fetch(playSetListEndpoint, { credentials: 'same-origin', cache: 'no-store' })
+    .then(function(r){
+      if (!r.ok) { throw new Error('HTTP ' + r.status); }
+      return r.json();
+    })
+    .then(function(j){
+      if (!j || !j.ok) { throw new Error('Response not ok'); }
+      renderPlaySetPicker(j.sets || []);
+    })
+    .catch(function(){
+      if (dom.pickerList) {
+        dom.pickerList.innerHTML = '<div class="le-play-picker-empty">Could not load saved number sets. Select numbers manually below.</div>';
+      }
+    });
+}
+
+function renderPlaySetPicker(sets){
+  if (!dom.pickerList) { return; }
+  if (!sets || !sets.length) {
+    dom.pickerList.innerHTML = '<div class="le-play-picker-empty">No saved number sets found. Save a set from Numbers to Play in MyLottoExpert first, then come back here.</div>';
+    return;
+  }
+  var LT = String.fromCharCode(60);
+  var GT = String.fromCharCode(62);
+  var html = '';
+  for (var i = 0; i < sets.length; i++){
+    var s = sets[i];
+    var nums = Array.isArray(s.main_numbers) ? s.main_numbers : [];
+    var preview = nums.slice(0, 10).join(', ') + (nums.length > 10 ? '...' : '');
+    var countTxt = nums.length + ' number' + (nums.length !== 1 ? 's' : '');
+    var dateTxt = s.date_saved ? (' | ' + escHtml(s.date_saved)) : '';
+    html += LT + 'div class="le-play-picker-item"' + GT;
+    html += LT + 'div class="le-play-picker-item__body"' + GT;
+    html += LT + 'div class="le-play-picker-item__name"' + GT + escHtml(s.label || ('Play Set #' + s.id)) + LT + '/div' + GT;
+    html += LT + 'div class="le-play-picker-item__meta"' + GT;
+    html += LT + 'span class="le-play-picker-item__badge"' + GT + escHtml(s.source_badge || 'Saved Set') + LT + '/span' + GT;
+    html += ' ' + countTxt + dateTxt;
+    html += LT + '/div' + GT;
+    html += LT + 'div class="le-play-picker-item__nums"' + GT + escHtml(preview) + LT + '/div' + GT;
+    html += LT + '/div' + GT;
+    html += LT + 'button type="button" class="le-btn ghost" data-use-set-idx="' + i + '" style="flex-shrink:0;white-space:nowrap;"' + GT + 'Use This Set' + LT + '/button' + GT;
+    html += LT + '/div' + GT;
+  }
+  dom.pickerList.innerHTML = html;
+  var btns = dom.pickerList.querySelectorAll('[data-use-set-idx]');
+  for (var j = 0; j < btns.length; j++){
+    (function(btn, idx){
+      btn.addEventListener('click', function(){
+        var s2 = sets[idx];
+        if (!s2) { return; }
+        var payload = {
+          play_set_id: s2.id || 0,
+          main_numbers: s2.main_numbers || [],
+          extra_ball_numbers: s2.extra_ball_numbers || [],
+          label: s2.label || '',
+          origin_source: s2.source_badge || ''
+        };
+        applyImportedPayload(payload);
+      });
+    })(btns[j], parseInt(btns[j].getAttribute('data-use-set-idx'), 10));
+  }
+}
+
 function syncPrintHeader(){
   if (dom.printSystemId) { dom.printSystemId.textContent = dom.sys ? dom.sys.textContent : '-'; }
   if (dom.printPick) { dom.printPick.textContent = dom.pick ? dom.pick.textContent : '-'; }
@@ -734,6 +915,7 @@ function updateSelectionUI(){
   if (dom.downloadBtn) { dom.downloadBtn.disabled = !hasBuilt; }
   if (dom.copyBtn) { dom.copyBtn.disabled = !hasBuilt; }
   if (dom.printBtn) { dom.printBtn.disabled = !hasBuilt; }
+  renderCountGuidance();
 }
 
 function onPick(e){
@@ -1133,7 +1315,7 @@ function loadWheelFromJson(sysId){
     if (dom.lines) { dom.lines.textContent = String(norm.combinationsCount); }
 
     if (dom.title){ dom.title.textContent = norm.name ? norm.name : ('Wheel Builder | ' + sysIdLocal); }
-    if (dom.lead){ dom.lead.textContent = 'Select exactly ' + norm.requiredSelections + ' numbers, then generate combinations using this wheel\'s template.'; }
+    if (dom.lead){ dom.lead.textContent = 'Your wheel is active. Choose your ' + norm.requiredSelections + ' numbers below, then click Generate Combinations.'; }
 
     var titleText = (norm.name ? norm.name : ('Wheel ' + sysIdLocal)) + ' | Wheel Builder | LottoExpert';
     var descriptionText = 'Use the LottoExpert wheel builder to generate combinations for system ' + sysIdLocal + '. Select ' + norm.requiredSelections + ' numbers, review coverage diagnostics, copy, print, or download your wheel output.';
@@ -1153,9 +1335,18 @@ function loadWheelFromJson(sysId){
     updateSelectionUI();
     syncPrintHeader();
     if (importedPayload && importedPayload.main_numbers && importedPayload.main_numbers.length){
-      setStatus('ok', 'Loaded system ' + sysIdLocal + '. Imported play set pre-populated your pool.');
+      var req3 = norm.requiredSelections;
+      var have3 = selected.length;
+      var diff3 = req3 - have3;
+      if (diff3 === 0) {
+        setStatus('ok', 'Wheel active. Your number set is ready. Click Generate Combinations.');
+      } else if (diff3 > 0) {
+        setStatus('ok', 'Wheel active. Your set loaded. Add ' + diff3 + ' more number' + (diff3 !== 1 ? 's' : '') + ' below to continue.');
+      } else {
+        setStatus('ok', 'Wheel active. Your set loaded. Remove ' + (-diff3) + ' number' + ((-diff3) !== 1 ? 's' : '') + ' below to continue.');
+      }
     } else {
-      setStatus('ok', 'Loaded. Select exactly ' + norm.requiredSelections + ' numbers to create your wheel.');
+      setStatus('ok', 'Wheel active. Select ' + norm.requiredSelections + ' numbers below to generate combinations.');
     }
   }
 
@@ -1217,6 +1408,10 @@ function loadWheelFromJson(sysId){
 
 function init(){
   systemId = qs('system_id');
+  var listEndpointParam = qs('play_sets_endpoint');
+  if (listEndpointParam && String(listEndpointParam).trim()) {
+    playSetListEndpoint = String(listEndpointParam).trim();
+  }
   renderMaxDropdown();
   wireButtons();
   applyBuilderSeo('Wheel Builder | LottoExpert', 'Use the LottoExpert wheel builder to generate combinations from a selected wheel system.');
@@ -1226,17 +1421,22 @@ function init(){
     if (!systemId){
       if (importedOk){
         if (dom.lead) {
-          dom.lead.textContent = 'Loaded play set. Choose a wheel system to continue, then create combinations.';
+          dom.lead.textContent = 'Your number set is loaded. Choose a wheel to apply it to, then generate combinations.';
         }
         if (dom.sys) { dom.sys.textContent = '-'; }
-        setStatus('ok', 'Play set imported. Select or enter a system_id to continue.');
+        setStatus('ok', 'Number set loaded. Enter a wheel ID in the field below or go to the catalog to choose a wheel.');
+        fetchPlaySets();
         return;
       }
-      setStatus('err', 'Missing system_id in the URL. Go back to the catalog and click "View System".');
-      if (dom.lead) { dom.lead.textContent = 'Missing system_id. Open a system from the catalog, or import a play set and then load a system.'; }
+      setStatus('err', 'No wheel selected. Go back to the catalog and choose a wheel to continue.');
+      if (dom.lead) { dom.lead.textContent = 'Choose a wheel from the catalog first, then come back here to generate combinations.'; }
+      fetchPlaySets();
       return;
     }
     loadWheelFromJson(systemId);
+    if (!importedOk) {
+      fetchPlaySets();
+    }
   });
 }
 
