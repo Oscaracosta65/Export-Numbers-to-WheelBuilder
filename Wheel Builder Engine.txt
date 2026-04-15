@@ -283,11 +283,26 @@ textarea{ min-height:92px; resize:vertical; }
 [[div class="le-grid"]]
   [[div class="le-card"]]
     [[div class="le-label"]]Step 1: Load or select your pool[[/div]]
-    [[div class="le-help"]]Choose exactly the required pool size for this wheel. You can either select manually, paste a list, or import from MyLottoExpert when that connection is wired.[[/div]]
+    [[div class="le-help"]]Choose exactly the required pool size for this wheel. You can select manually or load a play set imported from Numbers to Play.[[/div]]
 
     [[div class="le-status" role="status" aria-live="polite"]]
       [[span class="le-dot" id="leDot" aria-hidden="true"]][[/span]]
-      [[div id="leStatusText"]]Preparing…[[/div]]
+      [[div id="leStatusText"]]Preparing...[[/div]]
+    [[/div]]
+    [[div id="leImportState" class="le-status" style="display:none; margin-top:10px;" role="status" aria-live="polite"]]
+      [[span class="le-dot ok" aria-hidden="true"]][[/span]]
+      [[div id="leImportStateText"]]Imported from Numbers to Play.[[/div]]
+    [[/div]]
+
+    [[div class="le-row" style="margin-top:12px"]]
+      [[div style="flex:1 1 180px"]]
+        [[div class="le-label"]][[label for="leSystemInput"]]System ID[[/label]][[/div]]
+        [[input id="leSystemInput" class="le-input" type="text" placeholder="Example: PB-5-15"]]
+        [[div class="le-muted"]]If no system was selected yet, enter a system_id and load it without losing imported numbers.[[/div]]
+      [[/div]]
+      [[div style="flex:0 0 auto"]]
+        [[button id="leLoadSystemBtn" class="le-btn secondary" type="button"]]Load System[[/button]]
+      [[/div]]
     [[/div]]
 
     [[div class="le-row" style="margin-top:12px"]]
@@ -308,7 +323,7 @@ textarea{ min-height:92px; resize:vertical; }
     [[/div]]
 
     [[div class="le-row" style="margin-top:12px"]]
-      [[button id="leImportBtn" class="le-btn secondary" type="button"]]Import from MyLottoExpert[[/button]]
+      [[button id="leImportBtn" class="le-btn secondary" type="button"]]Import Numbers to Play[[/button]]
       [[button id="leRandomBtn" class="le-btn ghost" type="button"]]Random Select[[/button]]
       [[button id="leResetBtn" class="le-btn ghost" type="button"]]Reset Selection[[/button]]
     [[/div]]
@@ -379,6 +394,10 @@ var dom = {
   lines: document.getElementById('leLines'),
   dot: document.getElementById('leDot'),
   status: document.getElementById('leStatusText'),
+  importState: document.getElementById('leImportState'),
+  importStateText: document.getElementById('leImportStateText'),
+  systemInput: document.getElementById('leSystemInput'),
+  loadSystemBtn: document.getElementById('leLoadSystemBtn'),
   maxSel: document.getElementById('leMax'),
   zeroSel: document.getElementById('leIncludeZero'),
   importBtn: document.getElementById('leImportBtn'),
@@ -408,6 +427,9 @@ var includeZero = false;
 var builtLines = [];
 var builtCombos = [];
 var copyResetTimer = null;
+var playSetId = 0;
+var playSetEndpoint = '/my-lottoexpert?mle_action=play_set_payload';
+var importedPayload = null;
 
 function qs(name){
   try{
@@ -417,6 +439,166 @@ function qs(name){
     var m = (window.location.search || '').match(new RegExp('[?&]' + name + '=([^&]+)'));
     return m ? decodeURIComponent(m[1]) : null;
   }
+}
+
+function toPositiveInt(v){
+  var n = parseInt(String(v || '').replace(/[^\d\-]/g, ''), 10);
+  if (!(typeof n === 'number' && isFinite(n))) { return 0; }
+  return n;
+}
+
+function showImportedState(msg, isError){
+  if (dom.importState) { dom.importState.style.display = ''; }
+  if (dom.importStateText) { dom.importStateText.textContent = msg; }
+  if (dom.importState){
+    if (isError){
+      dom.importState.style.borderColor = 'rgba(239,68,68,.35)';
+      dom.importState.style.background = 'rgba(239,68,68,.08)';
+    } else {
+      dom.importState.style.borderColor = '';
+      dom.importState.style.background = '';
+    }
+  }
+}
+
+function parseCsvNumbers(raw){
+  var out = [];
+  var seen = {};
+  var parts = String(raw || '').split(',');
+  for (var i = 0; i < parts.length; i++){
+    var p = String(parts[i] || '').trim();
+    if (!/^\-?\d+$/.test(p)) { continue; }
+    var n = parseInt(p, 10);
+    if (!(typeof n === 'number' && isFinite(n))) { continue; }
+    if (n < 0) { continue; }
+    if (!seen[n]){
+      seen[n] = true;
+      out.push(n);
+    }
+  }
+  return out;
+}
+
+function applyImportedPayload(payload){
+  var p = payload || {};
+  var mains = Array.isArray(p.main_numbers) ? p.main_numbers : parseCsvNumbers(p.main_numbers);
+  var extras = Array.isArray(p.extra_ball_numbers) ? p.extra_ball_numbers : parseCsvNumbers(p.extra_ball_numbers);
+  var cleaned = [];
+  var maxSeen = 0;
+  var hasZero = false;
+  var i;
+
+  for (i = 0; i < mains.length; i++){
+    var n = toPositiveInt(mains[i]);
+    if (n === 0) { hasZero = true; cleaned.push(0); continue; }
+    if (n > 0) { cleaned.push(n); if (n > maxSeen) { maxSeen = n; } }
+  }
+
+  if (!cleaned.length){
+    showImportedState('Imported play set is missing valid main numbers.', true);
+    setStatus('err', 'Imported play set is invalid or empty.');
+    return false;
+  }
+
+  importedPayload = {
+    play_set_id: toPositiveInt(p.play_set_id),
+    lottery_id: toPositiveInt(p.lottery_id),
+    target_game_id: String(p.target_game_id || ''),
+    target_prediction_type: String(p.target_prediction_type || ''),
+    target_pick_size: toPositiveInt(p.target_pick_size),
+    target_extra_count: toPositiveInt(p.target_extra_count),
+    main_numbers: cleaned,
+    extra_ball_numbers: extras,
+    label: String(p.label || ''),
+    origin_source: String(p.origin_source || '')
+  };
+
+  if (hasZero) {
+    includeZero = true;
+    if (dom.zeroSel) { dom.zeroSel.value = '1'; }
+  }
+  if (maxSeen > maxNum) {
+    maxNum = maxSeen > 99 ? 99 : maxSeen;
+    renderMaxDropdown();
+    if (dom.maxSel) { dom.maxSel.value = String(maxNum); }
+  }
+
+  if (wheel){
+    var req = parseInt(wheel.requiredSelections, 10) || 0;
+    selected = [];
+    for (i = 0; i < importedPayload.main_numbers.length; i++){
+      var v = importedPayload.main_numbers[i];
+      if (!includeZero && v === 0) { continue; }
+      if (v > maxNum) { continue; }
+      selected.push(pad2(v));
+      if (req > 0 && selected.length >= req) { break; }
+    }
+    syncGridPressed();
+    updateSelectionUI();
+  } else {
+    selected = [];
+    for (i = 0; i < importedPayload.main_numbers.length; i++){
+      selected.push(pad2(importedPayload.main_numbers[i]));
+    }
+    updateSelectionUI();
+  }
+
+  showImportedState(
+    'Imported from Numbers to Play: ' +
+    (importedPayload.label ? importedPayload.label : ('Play set #' + (importedPayload.play_set_id || ''))) +
+    ' (' + importedPayload.main_numbers.length + ' mains' +
+    (importedPayload.extra_ball_numbers.length ? (', ' + importedPayload.extra_ball_numbers.length + ' extras') : '') + ').',
+    false
+  );
+  return true;
+}
+
+function importFromQueryParams(){
+  var endpointParam = qs('play_set_endpoint');
+  var fallbackMain = qs('main_numbers');
+  var fallbackLabel = qs('label');
+  var reqUrl;
+
+  playSetId = toPositiveInt(qs('play_set_id'));
+  if (endpointParam && String(endpointParam).trim()) {
+    playSetEndpoint = String(endpointParam).trim();
+  }
+
+  if (playSetId > 0){
+    reqUrl = playSetEndpoint + (playSetEndpoint.indexOf('?') === -1 ? '?' : '&') + 'play_set_id=' + encodeURIComponent(String(playSetId));
+    setStatus('ok', 'Loading imported play set #' + playSetId + ' ...');
+    return fetch(reqUrl, { credentials: 'same-origin', cache: 'no-store' })
+      .then(function(r){
+        if (!r.ok) { throw new Error('HTTP ' + r.status + ' while loading play set payload.'); }
+        return r.json();
+      })
+      .then(function(j){
+        if (!j || !j.ok || !j.payload) { throw new Error((j && j.error) ? j.error : 'Play set payload was not returned.'); }
+        if (!applyImportedPayload(j.payload)) { throw new Error('Play set payload failed validation.'); }
+        return true;
+      })
+      .catch(function(err){
+        showImportedState('Import failed. ' + String(err && err.message ? err.message : err), true);
+        setStatus('err', 'Could not import Numbers to Play payload.');
+        return false;
+      });
+  }
+
+  if (fallbackMain){
+    applyImportedPayload({
+      main_numbers: parseCsvNumbers(fallbackMain),
+      extra_ball_numbers: parseCsvNumbers(qs('extra_ball_numbers')),
+      label: fallbackLabel || '',
+      origin_source: qs('origin_source') || 'imported',
+      target_game_id: qs('target_game_id') || '',
+      target_prediction_type: qs('target_prediction_type') || '',
+      target_pick_size: toPositiveInt(qs('target_pick_size')),
+      target_extra_count: toPositiveInt(qs('target_extra_count'))
+    });
+    return Promise.resolve(true);
+  }
+
+  return Promise.resolve(false);
 }
 
 function setStatus(kind, msg){
@@ -880,7 +1062,22 @@ function wireButtons(){
 
   if (dom.importBtn){
     dom.importBtn.addEventListener('click', function(){
-      setStatus('err', 'Import is not wired yet. Next step is adding a Joomla endpoint to pull your saved prediction pool from MyLottoExpert.');
+      importFromQueryParams().then(function(ok){
+        if (!ok){
+          setStatus('err', 'No import payload is available in this URL.');
+        }
+      });
+    });
+  }
+
+  if (dom.loadSystemBtn){
+    dom.loadSystemBtn.addEventListener('click', function(){
+      var sid = dom.systemInput ? String(dom.systemInput.value || '').trim() : '';
+      if (!sid){
+        setStatus('err', 'Enter a system_id first, then click Load System.');
+        return;
+      }
+      loadWheelFromJson(sid);
     });
   }
 }
@@ -950,9 +1147,16 @@ function loadWheelFromJson(sysId){
 
     resetSelection();
     renderGrid();
+    if (importedPayload && importedPayload.main_numbers && importedPayload.main_numbers.length){
+      applyImportedPayload(importedPayload);
+    }
     updateSelectionUI();
     syncPrintHeader();
-    setStatus('ok', 'Loaded. Select exactly ' + norm.requiredSelections + ' numbers to create your wheel.');
+    if (importedPayload && importedPayload.main_numbers && importedPayload.main_numbers.length){
+      setStatus('ok', 'Loaded system ' + sysIdLocal + '. Imported play set pre-populated your pool.');
+    } else {
+      setStatus('ok', 'Loaded. Select exactly ' + norm.requiredSelections + ' numbers to create your wheel.');
+    }
   }
 
   function fallbackFetch(){
@@ -1016,14 +1220,24 @@ function init(){
   renderMaxDropdown();
   wireButtons();
   applyBuilderSeo('Wheel Builder | LottoExpert', 'Use the LottoExpert wheel builder to generate combinations from a selected wheel system.');
+  if (dom.systemInput && systemId) { dom.systemInput.value = systemId; }
 
-  if (!systemId){
-    setStatus('err', 'Missing system_id in the URL. Go back to the catalog and click "View System".');
-    if (dom.lead) { dom.lead.textContent = 'Missing system_id. Open a system from the catalog.'; }
-    return;
-  }
-
-  loadWheelFromJson(systemId);
+  importFromQueryParams().then(function(importedOk){
+    if (!systemId){
+      if (importedOk){
+        if (dom.lead) {
+          dom.lead.textContent = 'Loaded play set. Choose a wheel system to continue, then create combinations.';
+        }
+        if (dom.sys) { dom.sys.textContent = '-'; }
+        setStatus('ok', 'Play set imported. Select or enter a system_id to continue.');
+        return;
+      }
+      setStatus('err', 'Missing system_id in the URL. Go back to the catalog and click "View System".');
+      if (dom.lead) { dom.lead.textContent = 'Missing system_id. Open a system from the catalog, or import a play set and then load a system.'; }
+      return;
+    }
+    loadWheelFromJson(systemId);
+  });
 }
 
 if (document.readyState === 'loading'){

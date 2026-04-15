@@ -68,6 +68,9 @@ if ($workspaceUserId <= 0) {
     $app->redirect($__mlePreviewUrl);
     exit;
 }
+
+// Ensure play-set metadata columns exist on user_saved_numbers.
+mylottoexpertEnsureUserSavedNumbersPlayColumns($db);
 // --------------------------------------------------
 // Helper Functions (must be in the first PHP block for Sorcerer)
 // --------------------------------------------------
@@ -730,6 +733,110 @@ function mylottoexpertGenerateRunUuid()
     } catch (\Throwable $e) {
         return uniqid('mle_run_', true);
     }
+}
+
+function mylottoexpertEnsureUserSavedNumbersPlayColumns($db)
+{
+    $prefix  = $db->getPrefix();
+    $rawName = $prefix . 'user_saved_numbers';
+
+    $requiredCols = array(
+        'save_intent'       => "ALTER TABLE `{$rawName}` ADD COLUMN `save_intent` varchar(32) NOT NULL DEFAULT '' AFTER `source`",
+        'origin_source'     => "ALTER TABLE `{$rawName}` ADD COLUMN `origin_source` varchar(32) NOT NULL DEFAULT '' AFTER `save_intent`",
+        'play_status'       => "ALTER TABLE `{$rawName}` ADD COLUMN `play_status` varchar(20) NOT NULL DEFAULT 'draft' AFTER `origin_source`",
+        'user_editable'     => "ALTER TABLE `{$rawName}` ADD COLUMN `user_editable` tinyint(1) NOT NULL DEFAULT 1 AFTER `play_status`",
+        'play_notes'        => "ALTER TABLE `{$rawName}` ADD COLUMN `play_notes` text NULL DEFAULT NULL AFTER `user_editable`",
+        'wheel_exported_at' => "ALTER TABLE `{$rawName}` ADD COLUMN `wheel_exported_at` datetime NULL DEFAULT NULL AFTER `play_notes`",
+        'wheel_export_count'=> "ALTER TABLE `{$rawName}` ADD COLUMN `wheel_export_count` int(11) NOT NULL DEFAULT 0 AFTER `wheel_exported_at`",
+        'is_favorite_play'  => "ALTER TABLE `{$rawName}` ADD COLUMN `is_favorite_play` tinyint(1) NOT NULL DEFAULT 0 AFTER `wheel_export_count`"
+    );
+
+    foreach ($requiredCols as $colName => $alterSql) {
+        try {
+            $db->setQuery(
+                "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS"
+              . " WHERE TABLE_SCHEMA = DATABASE()"
+              . "   AND TABLE_NAME = " . $db->quote($rawName)
+              . "   AND COLUMN_NAME = " . $db->quote($colName)
+            );
+            if ((int)$db->loadResult() <= 0) {
+                $db->setQuery($alterSql);
+                $db->execute();
+            }
+        } catch (Exception $e) {
+        }
+    }
+
+    return true;
+}
+
+function mylottoexpertParseNumberCsv($csv, $allowZero = false)
+{
+    $raw = array_filter(explode(',', (string)$csv), 'strlen');
+    $out = array();
+    foreach ($raw as $part) {
+        $n = (int)trim((string)$part);
+        if ($allowZero ? ($n < 0) : ($n <= 0)) {
+            continue;
+        }
+        if (!in_array($n, $out, true)) {
+            $out[] = $n;
+        }
+    }
+    return $out;
+}
+
+function mylottoexpertResolvePlayIntentMeta($row)
+{
+    $saveIntent   = strtolower(trim((string)(mylottoexpertResolveRowValue($row, 'save_intent') ?? '')));
+    $originSource = strtolower(trim((string)(mylottoexpertResolveRowValue($row, 'origin_source') ?? '')));
+    $playStatus   = strtolower(trim((string)(mylottoexpertResolveRowValue($row, 'play_status') ?? '')));
+    $source       = strtolower(trim((string)(mylottoexpertResolveRowValue($row, 'source') ?? '')));
+
+    if ($saveIntent === '') {
+        if ($source === 'strategy_set') {
+            $saveIntent = 'play_set';
+        } else {
+            $saveIntent = 'prediction_archive';
+        }
+    }
+
+    if ($originSource === '') {
+        if ($source === 'strategy_set') {
+            $originSource = 'strategy_builder';
+        } elseif ($saveIntent === 'custom_play') {
+            $originSource = 'manual';
+        } else {
+            $originSource = 'skai_prediction';
+        }
+    }
+
+    if ($playStatus === '') {
+        $playStatus = ($saveIntent === 'prediction_archive') ? 'archived' : 'ready';
+    }
+
+    return array(
+        'save_intent'   => $saveIntent,
+        'origin_source' => $originSource,
+        'play_status'   => $playStatus
+    );
+}
+
+function mylottoexpertResolvePlaySourceBadge($originSource, $saveIntent)
+{
+    $originSource = strtolower(trim((string)$originSource));
+    $saveIntent   = strtolower(trim((string)$saveIntent));
+
+    if ($originSource === 'strategy_builder') {
+        return 'From Strategy Builder';
+    }
+    if ($originSource === 'manual' || $saveIntent === 'custom_play') {
+        return 'Custom Selection';
+    }
+    if ($originSource === 'imported') {
+        return 'Imported';
+    }
+    return 'From Prediction';
 }
 
 function mylottoexpertBuildGroupIdentity(array $targetMeta)
@@ -2518,6 +2625,79 @@ if (!skaiMigratePerformanceTableKeys($db)) {
     );
 }
 
+// --------------------------------------------------
+// Numbers to Play payload endpoint for Wheel Builder import
+// --------------------------------------------------
+$__mleAction = strtolower(trim($app->input->getString('mle_action', '')));
+if ($__mleAction === 'play_set_payload') {
+    $app->setHeader('Content-Type', 'application/json; charset=utf-8', true);
+    $app->setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0', true);
+    $app->setHeader('Pragma', 'no-cache', true);
+
+    $playSetId = $app->input->getInt('play_set_id', 0);
+    if ($playSetId <= 0) {
+        echo json_encode(array('ok' => false, 'error' => 'Missing play_set_id.'));
+        exit;
+    }
+
+    $snCols = array();
+    try {
+        $snColsRaw = $db->getTableColumns('#__user_saved_numbers', false);
+        $snCols = is_array($snColsRaw) ? array_keys($snColsRaw) : array();
+    } catch (\Throwable $e) {
+        $snCols = array();
+    }
+
+    $q = $db->getQuery(true)
+        ->select('*')
+        ->from($db->quoteName('#__user_saved_numbers'))
+        ->where($db->quoteName('id') . ' = ' . (int)$playSetId)
+        ->where($db->quoteName('user_id') . ' = ' . (int)$workspaceUserId);
+    if (in_array('save_intent', $snCols, true)) {
+        $q->where(
+            '(' .
+            $db->quoteName('save_intent') . " IN ('play_set','custom_play','wheel_candidate')" .
+            ' OR (' . $db->quoteName('save_intent') . " = '' AND " . $db->quoteName('source') . " = 'strategy_set')" .
+            ')'
+        );
+    } else {
+        $q->where($db->quoteName('source') . " = 'strategy_set'");
+    }
+    $db->setQuery($q, 0, 1);
+    $row = $db->loadAssoc();
+
+    if (empty($row)) {
+        echo json_encode(array('ok' => false, 'error' => 'Play set not found.'));
+        exit;
+    }
+
+    $meta = mylottoexpertResolvePlayIntentMeta($row);
+    $main = mylottoexpertParseNumberCsv($row['main_numbers'] ?? '', true);
+    $extra = mylottoexpertParseNumberCsv($row['extra_ball_numbers'] ?? '', true);
+    if (empty($main)) {
+        echo json_encode(array('ok' => false, 'error' => 'Play set has no main numbers.'));
+        exit;
+    }
+
+    $payload = array(
+        'play_set_id'             => (int)($row['id'] ?? 0),
+        'lottery_id'              => (int)($row['lottery_id'] ?? 0),
+        'target_game_id'          => trim((string)($row['target_game_id'] ?? '')),
+        'target_prediction_type'  => trim((string)($row['target_prediction_type'] ?? '')),
+        'target_pick_size'        => (int)($row['target_pick_size'] ?? count($main)),
+        'target_extra_count'      => (int)($row['target_extra_count'] ?? count($extra)),
+        'main_numbers'            => $main,
+        'extra_ball_numbers'      => $extra,
+        'label'                   => trim((string)($row['label'] ?? '')),
+        'origin_source'           => $meta['origin_source'],
+        'save_intent'             => $meta['save_intent'],
+        'play_status'             => $meta['play_status']
+    );
+
+    echo json_encode(array('ok' => true, 'payload' => $payload), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    exit;
+}
+
 // New Features toggle (persisted in #__user_profiles)
 // Stored as '1' (show) / '0' (hide).
 // We can safely call helpers before their textual definition (PHP parses file first).
@@ -2567,6 +2747,12 @@ if (!MLE_DEMO_MODE && $app->input->getMethod() === 'POST') {
         ($app->input->post->get('delete_set_selected', '', 'STRING') !== '') ||
         ($app->input->post->get('delete_all_predictions', '', 'STRING') !== '') ||
         ($app->input->post->get('delete_lottery_predictions', '', 'STRING') !== '') ||
+        ($app->input->post->getInt('save_prediction_as_play', 0) > 0) ||
+        ($app->input->post->getInt('duplicate_play_entry', 0) > 0) ||
+        ($app->input->post->getInt('update_play_entry', 0) > 0) ||
+        ($app->input->post->getInt('archive_play_entry', 0) > 0) ||
+        ($app->input->post->getInt('delete_play_entry', 0) > 0) ||
+        ($app->input->post->getInt('send_play_to_wheel', 0) > 0) ||
         ($app->input->post->getInt('delete_setting_template', 0) > 0) ||
         ($app->input->post->get('save_setting_template', '', 'STRING') !== '') ||
         ($app->input->post->getInt('update_setting_note', 0) > 0) ||
@@ -2580,6 +2766,14 @@ if (!MLE_DEMO_MODE && $app->input->getMethod() === 'POST') {
         exit;
     }
 
+    $__actionSnCols = array();
+    try {
+        $__actionSnColsRaw = $db->getTableColumns('#__user_saved_numbers', false);
+        $__actionSnCols = is_array($__actionSnColsRaw) ? array_keys($__actionSnColsRaw) : array();
+    } catch (\Throwable $__snColsE) {
+        $__actionSnCols = array();
+    }
+
     // Delete single prediction (hardened: use Joomla input filtering)
     $id = $app->input->post->getInt('delete_set', 0);
     if ($id > 0) {
@@ -2589,6 +2783,13 @@ if (!MLE_DEMO_MODE && $app->input->getMethod() === 'POST') {
             ->delete($db->quoteName('#__user_saved_numbers'))
             ->where($db->quoteName('id') . ' = ' . $id)
             ->where($db->quoteName('user_id') . ' = ' . $workspaceUserId);
+        if (in_array('save_intent', $__actionSnCols, true)) {
+            $q->where(
+                '(' .
+                $db->quoteName('save_intent') . " = 'prediction_archive' OR (" .
+                $db->quoteName('save_intent') . " = '' AND " . $db->quoteName('source') . " <> 'strategy_set'))"
+            );
+        }
 
         $db->setQuery($q);
         try {
@@ -2610,6 +2811,13 @@ if (!MLE_DEMO_MODE && $app->input->getMethod() === 'POST') {
                 ->delete($db->quoteName('#__user_saved_numbers'))
                 ->where($db->quoteName('id') . ' IN (' . implode(',', $__selectedIds) . ')')
                 ->where($db->quoteName('user_id') . ' = ' . $workspaceUserId);
+            if (in_array('save_intent', $__actionSnCols, true)) {
+                $q->where(
+                    '(' .
+                    $db->quoteName('save_intent') . " = 'prediction_archive' OR (" .
+                    $db->quoteName('save_intent') . " = '' AND " . $db->quoteName('source') . " <> 'strategy_set'))"
+                );
+            }
             $db->setQuery($q);
             try {
                 $db->execute();
@@ -2629,6 +2837,13 @@ if (!MLE_DEMO_MODE && $app->input->getMethod() === 'POST') {
         $q = $db->getQuery(true)
             ->delete($db->quoteName('#__user_saved_numbers'))
             ->where($db->quoteName('user_id') . ' = ' . $workspaceUserId);
+        if (in_array('save_intent', $__actionSnCols, true)) {
+            $q->where(
+                '(' .
+                $db->quoteName('save_intent') . " = 'prediction_archive' OR (" .
+                $db->quoteName('save_intent') . " = '' AND " . $db->quoteName('source') . " <> 'strategy_set'))"
+            );
+        }
 
         $db->setQuery($q);
         try {
@@ -2676,6 +2891,13 @@ if ($doGroupDelete && ($predictionTargetIdPost !== '' || ($lotteryId && $drawDat
     $q = $db->getQuery(true)
         ->delete($db->quoteName('#__user_saved_numbers'))
         ->where($db->quoteName('user_id') . ' = ' . $workspaceUserId);
+    if (in_array('save_intent', $__actionSnCols, true)) {
+        $q->where(
+            '(' .
+            $db->quoteName('save_intent') . " = 'prediction_archive' OR (" .
+            $db->quoteName('save_intent') . " = '' AND " . $db->quoteName('source') . " <> 'strategy_set'))"
+        );
+    }
 
     // [FIX-DELETE-LEGACY] When prediction_target_id is available (new rows), use it directly.
     // Older rows may have the column present but empty because they were saved before the
@@ -2714,6 +2936,279 @@ if ($doGroupDelete && ($predictionTargetIdPost !== '' || ($lotteryId && $drawDat
         error_log('[MLE] Error deleting prediction group for user=' . $workspaceUserId . ': ' . $e->getMessage());
         $app->enqueueMessage('An error occurred while deleting. Please try again.', 'error');
     }
+}
+
+// Save prediction as Numbers to Play
+$__savePredictionAsPlay = $app->input->post->getInt('save_prediction_as_play', 0);
+if ($__savePredictionAsPlay > 0) {
+    $__predictionSetId = $app->input->post->getInt('prediction_set_id', 0);
+    if ($__predictionSetId > 0) {
+        $q = $db->getQuery(true)
+            ->select('*')
+            ->from($db->quoteName('#__user_saved_numbers'))
+            ->where($db->quoteName('id') . ' = ' . $__predictionSetId)
+            ->where($db->quoteName('user_id') . ' = ' . $workspaceUserId);
+        $db->setQuery($q, 0, 1);
+        $__srcRow = (array)$db->loadAssoc();
+
+        if (!empty($__srcRow)) {
+            $__srcMain = mylottoexpertParseNumberCsv($__srcRow['main_numbers'] ?? '', true);
+            if (!empty($__srcMain)) {
+                $__playInsert = $__srcRow;
+                unset($__playInsert['id']);
+                $__playInsert['source'] = 'strategy_set';
+                $__playInsert['date_saved'] = date('Y-m-d H:i:s');
+                $__playInsert['generated_at'] = date('Y-m-d H:i:s');
+                $__playInsert['label'] = trim((string)($__srcRow['label'] ?? '')) !== ''
+                    ? (trim((string)$__srcRow['label']) . ' - Play')
+                    : ('Play Set - ' . date('Y-m-d H:i'));
+                $__playInsert['save_intent'] = 'play_set';
+                $__playInsert['origin_source'] = 'skai_prediction';
+                $__playInsert['play_status'] = 'ready';
+                $__playInsert['user_editable'] = 1;
+                $__playInsert['wheel_export_count'] = 0;
+                $__playInsert['wheel_exported_at'] = null;
+                $__playInsert['is_favorite_play'] = 0;
+                $__playInsert['play_notes'] = null;
+
+                $__cols = array();
+                $__vals = array();
+                foreach ($__playInsert as $__col => $__val) {
+                    if (!empty($__actionSnCols) && !in_array($__col, $__actionSnCols, true)) {
+                        continue;
+                    }
+                    $__cols[] = $db->quoteName($__col);
+                    if ($__val === null || $__val === '') {
+                        $__vals[] = 'NULL';
+                    } elseif (is_int($__val) || is_float($__val)) {
+                        $__vals[] = (string)$__val;
+                    } else {
+                        $__vals[] = $db->quote((string)$__val);
+                    }
+                }
+
+                if (!empty($__cols)) {
+                    $q = $db->getQuery(true)
+                        ->insert($db->quoteName('#__user_saved_numbers'))
+                        ->columns($__cols)
+                        ->values(implode(',', $__vals));
+                    $db->setQuery($q);
+                    try {
+                        $db->execute();
+                        $app->enqueueMessage('Saved as play set in Numbers to Play.', 'message');
+                    } catch (Exception $__spE) {
+                        error_log('[MLE] Failed Save as Play for row=' . $__predictionSetId . ': ' . $__spE->getMessage());
+                        $app->enqueueMessage('Could not save this play set right now.', 'error');
+                    }
+                }
+            } else {
+                $app->enqueueMessage('This prediction has no numbers to save as a play set.', 'warning');
+            }
+        }
+    }
+    $app->redirect(\Joomla\CMS\Uri\Uri::getInstance()->toString());
+    exit;
+}
+
+// Update play set label/notes
+$__updatePlayEntry = $app->input->post->getInt('update_play_entry', 0);
+if ($__updatePlayEntry > 0) {
+    $__playId = $app->input->post->getInt('play_set_id', 0);
+    $__newLabel = substr(trim($app->input->post->getString('play_label', '')), 0, 80);
+    $__newNotes = substr(trim($app->input->post->getString('play_notes', '')), 0, 1000);
+    if ($__playId > 0 && $__newLabel !== '') {
+        $q = $db->getQuery(true)
+            ->update($db->quoteName('#__user_saved_numbers'))
+            ->set($db->quoteName('label') . ' = ' . $db->quote($__newLabel))
+            ->where($db->quoteName('id') . ' = ' . $__playId)
+            ->where($db->quoteName('user_id') . ' = ' . $workspaceUserId);
+        if (in_array('play_notes', $__actionSnCols, true)) {
+            $q->set($db->quoteName('play_notes') . ' = ' . ($__newNotes !== '' ? $db->quote($__newNotes) : 'NULL'));
+        }
+        $db->setQuery($q);
+        try {
+            $db->execute();
+            $app->enqueueMessage('Play set updated.', 'message');
+        } catch (Exception $__upe) {
+            error_log('[MLE] update_play_entry failed: ' . $__upe->getMessage());
+            $app->enqueueMessage('Could not update this play set right now.', 'error');
+        }
+    }
+    $app->redirect(\Joomla\CMS\Uri\Uri::getInstance()->toString());
+    exit;
+}
+
+// Duplicate play entry
+$__duplicatePlayEntry = $app->input->post->getInt('duplicate_play_entry', 0);
+if ($__duplicatePlayEntry > 0) {
+    $__playId = $app->input->post->getInt('play_set_id', 0);
+    if ($__playId > 0) {
+        $q = $db->getQuery(true)
+            ->select('*')
+            ->from($db->quoteName('#__user_saved_numbers'))
+            ->where($db->quoteName('id') . ' = ' . $__playId)
+            ->where($db->quoteName('user_id') . ' = ' . $workspaceUserId);
+        if (in_array('save_intent', $__actionSnCols, true)) {
+            $q->where(
+                '(' . $db->quoteName('save_intent') . " IN ('play_set','custom_play','wheel_candidate')" .
+                ' OR (' . $db->quoteName('save_intent') . " = '' AND " . $db->quoteName('source') . " = 'strategy_set')" .
+                ')'
+            );
+        }
+        $db->setQuery($q, 0, 1);
+        $__dupRow = (array)$db->loadAssoc();
+        if (!empty($__dupRow)) {
+            unset($__dupRow['id']);
+            $__dupRow['label'] = substr(trim((string)($__dupRow['label'] ?? '')) . ' (Copy)', 0, 80);
+            $__dupRow['date_saved'] = date('Y-m-d H:i:s');
+            $__dupRow['generated_at'] = date('Y-m-d H:i:s');
+            if (in_array('wheel_export_count', $__actionSnCols, true)) { $__dupRow['wheel_export_count'] = 0; }
+            if (in_array('wheel_exported_at', $__actionSnCols, true)) { $__dupRow['wheel_exported_at'] = null; }
+
+            $__cols = array();
+            $__vals = array();
+            foreach ($__dupRow as $__col => $__val) {
+                if (!empty($__actionSnCols) && !in_array($__col, $__actionSnCols, true)) {
+                    continue;
+                }
+                $__cols[] = $db->quoteName($__col);
+                if ($__val === null || $__val === '') {
+                    $__vals[] = 'NULL';
+                } elseif (is_int($__val) || is_float($__val)) {
+                    $__vals[] = (string)$__val;
+                } else {
+                    $__vals[] = $db->quote((string)$__val);
+                }
+            }
+
+            if (!empty($__cols)) {
+                $q = $db->getQuery(true)
+                    ->insert($db->quoteName('#__user_saved_numbers'))
+                    ->columns($__cols)
+                    ->values(implode(',', $__vals));
+                $db->setQuery($q);
+                try {
+                    $db->execute();
+                    $app->enqueueMessage('Play set duplicated.', 'message');
+                } catch (Exception $__dpe) {
+                    error_log('[MLE] duplicate_play_entry failed: ' . $__dpe->getMessage());
+                    $app->enqueueMessage('Could not duplicate this play set right now.', 'error');
+                }
+            }
+        }
+    }
+    $app->redirect(\Joomla\CMS\Uri\Uri::getInstance()->toString());
+    exit;
+}
+
+// Archive play entry
+$__archivePlayEntry = $app->input->post->getInt('archive_play_entry', 0);
+if ($__archivePlayEntry > 0) {
+    $__playId = $app->input->post->getInt('play_set_id', 0);
+    if ($__playId > 0 && in_array('play_status', $__actionSnCols, true)) {
+        $q = $db->getQuery(true)
+            ->update($db->quoteName('#__user_saved_numbers'))
+            ->set($db->quoteName('play_status') . " = 'archived'")
+            ->where($db->quoteName('id') . ' = ' . $__playId)
+            ->where($db->quoteName('user_id') . ' = ' . $workspaceUserId);
+        if (in_array('save_intent', $__actionSnCols, true)) {
+            $q->where($db->quoteName('save_intent') . " IN ('play_set','custom_play','wheel_candidate')");
+        }
+        $db->setQuery($q);
+        try {
+            $db->execute();
+            $app->enqueueMessage('Play set archived.', 'message');
+        } catch (Exception $__ape) {
+            error_log('[MLE] archive_play_entry failed: ' . $__ape->getMessage());
+            $app->enqueueMessage('Could not archive this play set right now.', 'error');
+        }
+    }
+    $app->redirect(\Joomla\CMS\Uri\Uri::getInstance()->toString());
+    exit;
+}
+
+// Delete play entry
+$__deletePlayEntry = $app->input->post->getInt('delete_play_entry', 0);
+if ($__deletePlayEntry > 0) {
+    $__playId = $app->input->post->getInt('play_set_id', 0);
+    if ($__playId > 0) {
+        $q = $db->getQuery(true)
+            ->delete($db->quoteName('#__user_saved_numbers'))
+            ->where($db->quoteName('id') . ' = ' . $__playId)
+            ->where($db->quoteName('user_id') . ' = ' . $workspaceUserId);
+        if (in_array('save_intent', $__actionSnCols, true)) {
+            $q->where(
+                '(' . $db->quoteName('save_intent') . " IN ('play_set','custom_play','wheel_candidate')" .
+                ' OR (' . $db->quoteName('save_intent') . " = '' AND " . $db->quoteName('source') . " = 'strategy_set')" .
+                ')'
+            );
+        }
+        $db->setQuery($q);
+        try {
+            $db->execute();
+            $app->enqueueMessage('Play set deleted.', 'message');
+        } catch (Exception $__dle) {
+            error_log('[MLE] delete_play_entry failed: ' . $__dle->getMessage());
+            $app->enqueueMessage('Could not delete this play set right now.', 'error');
+        }
+    }
+    $app->redirect(\Joomla\CMS\Uri\Uri::getInstance()->toString());
+    exit;
+}
+
+// Send play set to Wheel Builder
+$__sendPlayToWheel = $app->input->post->getInt('send_play_to_wheel', 0);
+if ($__sendPlayToWheel > 0) {
+    $__playId = $app->input->post->getInt('play_set_id', 0);
+    $__systemId = $app->input->post->getInt('play_system_id', 0);
+    if ($__playId > 0) {
+        $q = $db->getQuery(true)
+            ->select(array('id', 'main_numbers'))
+            ->from($db->quoteName('#__user_saved_numbers'))
+            ->where($db->quoteName('id') . ' = ' . $__playId)
+            ->where($db->quoteName('user_id') . ' = ' . $workspaceUserId);
+        if (in_array('save_intent', $__actionSnCols, true)) {
+            $q->where(
+                '(' . $db->quoteName('save_intent') . " IN ('play_set','custom_play','wheel_candidate')" .
+                ' OR (' . $db->quoteName('save_intent') . " = '' AND " . $db->quoteName('source') . " = 'strategy_set')" .
+                ')'
+            );
+        }
+        $db->setQuery($q, 0, 1);
+        $__playForWheel = (array)$db->loadAssoc();
+
+        if (!empty($__playForWheel) && !empty(mylottoexpertParseNumberCsv($__playForWheel['main_numbers'] ?? '', true))) {
+            if (in_array('wheel_export_count', $__actionSnCols, true) || in_array('wheel_exported_at', $__actionSnCols, true) || in_array('play_status', $__actionSnCols, true)) {
+                $q = $db->getQuery(true)
+                    ->update($db->quoteName('#__user_saved_numbers'))
+                    ->where($db->quoteName('id') . ' = ' . $__playId)
+                    ->where($db->quoteName('user_id') . ' = ' . $workspaceUserId);
+                if (in_array('wheel_export_count', $__actionSnCols, true)) {
+                    $q->set($db->quoteName('wheel_export_count') . ' = COALESCE(' . $db->quoteName('wheel_export_count') . ',0) + 1');
+                }
+                if (in_array('wheel_exported_at', $__actionSnCols, true)) {
+                    $q->set($db->quoteName('wheel_exported_at') . ' = ' . $db->quote(date('Y-m-d H:i:s')));
+                }
+                if (in_array('play_status', $__actionSnCols, true)) {
+                    $q->set($db->quoteName('play_status') . " = 'wheeled'");
+                }
+                $db->setQuery($q);
+                try { $db->execute(); } catch (Exception $__swe) {}
+            }
+
+            $__wheelUrl = '/wheel-builder1?play_set_id=' . (int)$__playId . '&source=mylottoexpert';
+            if ($__systemId > 0) {
+                $__wheelUrl .= '&system_id=' . (int)$__systemId;
+            }
+            $__endpointUrl = \Joomla\CMS\Uri\Uri::getInstance()->toString(array('path')) . '?mle_action=play_set_payload';
+            $__wheelUrl .= '&play_set_endpoint=' . rawurlencode($__endpointUrl);
+            $app->redirect($__wheelUrl);
+            exit;
+        }
+    }
+    $app->enqueueMessage('Play set could not be loaded for wheel export.', 'error');
+    $app->redirect(\Joomla\CMS\Uri\Uri::getInstance()->toString());
+    exit;
 }
 
 // [[MLE_USER_NOTES_MIGRATION]] Add user_notes column if it does not yet exist.
@@ -2890,6 +3385,14 @@ if ($id > 0) {
         $__stTargetDrawSession    = mylottoexpertNormalizeTargetSession($app->input->post->getString('strategy_target_draw_session', ''));
         $__stTargetPredictionType = trim($app->input->post->getString('strategy_target_prediction_type', ''));
         $__stTargetFamily         = trim($app->input->post->getString('strategy_target_prediction_family', ''));
+        $__stSaveIntent           = strtolower(trim($app->input->post->getString('strategy_save_intent', 'play_set')));
+        $__stOriginSource         = strtolower(trim($app->input->post->getString('strategy_origin_source', 'strategy_builder')));
+        if (!in_array($__stSaveIntent, array('play_set', 'custom_play', 'wheel_candidate'), true)) {
+            $__stSaveIntent = 'play_set';
+        }
+        if (!in_array($__stOriginSource, array('strategy_builder', 'manual', 'imported', 'skai_prediction'), true)) {
+            $__stOriginSource = ($__stSaveIntent === 'custom_play') ? 'manual' : 'strategy_builder';
+        }
 
         // Validate lottery_id exists in lotteries table
         $__stLidCheck = 0;
@@ -2927,7 +3430,7 @@ if ($id > 0) {
 
         if ($__stLidCheck > 0 && $__stNormDate !== '' && count($__stMainNums) > 0) {
             $__stLabel = $__stLbl !== '' ? $__stLbl
-                : 'Strategy Set - ' . date('Y-m-d H:i');
+                : 'Play Set - ' . date('Y-m-d H:i');
 
             if ($__stTargetFamily === '') {
                 $__stTargetFamily = 'regular';
@@ -2977,6 +3480,13 @@ if ($id > 0) {
                 'target_prediction_type'  => ($__stTarget['target_prediction_type'] ?? null),
                 'target_pick_size'        => ($__stTarget['target_pick_size'] ?? null),
                 'target_extra_count'      => ($__stTarget['target_extra_count'] ?? null),
+                'save_intent'             => $__stSaveIntent,
+                'origin_source'           => $__stOriginSource,
+                'play_status'             => 'ready',
+                'user_editable'           => 1,
+                'wheel_export_count'      => 0,
+                'wheel_exported_at'       => null,
+                'is_favorite_play'        => 0,
             );
 
             $__stColumnsMap = array();
@@ -3010,10 +3520,10 @@ if ($id > 0) {
             $db->setQuery($q);
             try {
                 $db->execute();
-                $app->enqueueMessage('Strategy saved to Saved Numbers.', 'message');
+                $app->enqueueMessage('Play set saved to Numbers to Play.', 'message');
             } catch (Exception $e) {
                 error_log('[MLE] Error saving strategy for user=' . $workspaceUserId . ': ' . $e->getMessage());
-                $app->enqueueMessage('An error occurred while saving the strategy. Please try again.', 'error');
+                $app->enqueueMessage('An error occurred while saving the play set. Please try again.', 'error');
             }
         } else {
             $app->enqueueMessage('Please add at least one number before saving.', 'warning');
@@ -8234,7 +8744,7 @@ h3.title { font-size: 1.5rem; }
     <div class="mle-start-here__header-left">
       <div class="mle-start-here__eyebrow">Start Here</div>
       <h3 class="mle-start-here__title">How to use this workspace</h3>
-      <p class="mle-start-here__subtitle">Review your lotteries, compare saved predictions, and decide what to run next — all in one place.</p>
+      <p class="mle-start-here__subtitle">Review your lotteries, compare saved predictions, build a focused pool, and move approved sets into Numbers to Play.</p>
     </div>
     <span class="mle-start-here__badge">Beginner-friendly</span>
   </div>
@@ -8262,8 +8772,8 @@ h3.title { font-size: 1.5rem; }
       <div class="mle-start-here__step">
         <div class="mle-start-here__step-num">3</div>
         <div class="mle-start-here__step-body">
-          <strong>Decide what to run next</strong>
-          <span>Use the Best Performing Setups and Focus Areas sections to see what worked. Repeat the strongest setup or adjust one variable at a time.</span>
+          <strong>Approve your Numbers to Play</strong>
+          <span>Use the strategy area to refine your pool, save your final set into Numbers to Play, then send it to Wheel Builder when you are ready.</span>
         </div>
       </div>
 
@@ -8314,6 +8824,13 @@ try {
         ->select('COUNT(DISTINCT ' . $__mleDrawExpr . ') AS tracked_draws')
         ->from($db->quoteName('#__user_saved_numbers'))
         ->where($db->quoteName('user_id') . ' = ' . $workspaceUserId);
+    if (in_array('save_intent', $__mleSnCols, true)) {
+        $__mleQ->where(
+            '(' .
+            $db->quoteName('save_intent') . " = 'prediction_archive' OR (" .
+            $db->quoteName('save_intent') . " = '' AND " . $db->quoteName('source') . " <> 'strategy_set'))"
+        );
+    }
     $db->setQuery($__mleQ);
     $__mleStats = (array) $db->loadAssoc();
 
@@ -10151,7 +10668,9 @@ $__snNewCols = array(
     'target_game_id', 'target_lottery_id', 'target_draw_date', 'target_draw_at',
     'target_draw_session', 'target_timezone_id', 'target_prediction_family',
     'target_prediction_type', 'target_pick_size', 'target_extra_count',
-    'run_uuid', 'snapshot_run_uuid'
+    'run_uuid', 'snapshot_run_uuid',
+    'save_intent', 'origin_source', 'play_status', 'user_editable', 'play_notes',
+    'wheel_exported_at', 'wheel_export_count', 'is_favorite_play'
 );
 $__snSelectNew = array();
 foreach ($__snNewCols as $__snc) {
@@ -10188,11 +10707,57 @@ $q->from($db->quoteName('#__user_saved_numbers', 'sn'));
 $q->join('LEFT', $db->quoteName('#__lotteries', 'l') . ' ON sn.lottery_id = l.lottery_id');
 
 $q->where('sn.user_id = ' . $workspaceUserId);
+if (in_array('save_intent', $__snCols, true)) {
+    $q->where(
+        "(sn.save_intent = 'prediction_archive' OR (COALESCE(sn.save_intent,'') = '' AND sn.source <> 'strategy_set'))"
+    );
+}
 $q->order('sn.next_draw_date ' . $predSortDir . ', sn.source ASC, COALESCE(sn.generated_at,sn.date_saved) ' . $predSortDir);
 
 $db->setQuery($q);
 $savedSets = $db->loadObjectList() ?: [];
 // Read user preference (default show = '1')
+
+$playSets = array();
+try {
+    $qPlay = $db->getQuery(true)
+        ->select(array(
+            'sn.id','sn.lottery_id','sn.next_draw_date','sn.source','sn.label','sn.main_numbers',
+            'sn.extra_ball_numbers','sn.date_saved',
+            'l.name AS lottery_name'
+        ))
+        ->from($db->quoteName('#__user_saved_numbers', 'sn'))
+        ->join('LEFT', $db->quoteName('#__lotteries', 'l') . ' ON sn.lottery_id = l.lottery_id')
+        ->where('sn.user_id = ' . $workspaceUserId);
+
+    if (in_array('save_intent', $__snCols, true)) {
+        $__playOptionalCols = array(
+            'save_intent','origin_source','play_status','user_editable','play_notes',
+            'wheel_exported_at','wheel_export_count','is_favorite_play',
+            'target_game_id','target_prediction_type','target_pick_size','target_extra_count'
+        );
+        $__playSelectCols = array();
+        foreach ($__playOptionalCols as $__playCol) {
+            if (in_array($__playCol, $__snCols, true)) {
+                $__playSelectCols[] = 'sn.' . $__playCol;
+            }
+        }
+        if (!empty($__playSelectCols)) {
+            $qPlay->select($__playSelectCols);
+        }
+        $qPlay->where(
+            "(sn.save_intent IN ('play_set','custom_play','wheel_candidate') OR (COALESCE(sn.save_intent,'') = '' AND sn.source = 'strategy_set'))"
+        );
+    } else {
+        $qPlay->where("sn.source = 'strategy_set'");
+    }
+
+    $qPlay->order('COALESCE(sn.date_saved, sn.generated_at) DESC');
+    $db->setQuery($qPlay);
+    $playSets = $db->loadObjectList() ?: array();
+} catch (Exception $__playLoadE) {
+    $playSets = array();
+}
 
 // Ensure we have URLs (and meta) for ALL lotteries that appear in savedSets,
 // even if they are NOT in Favorites.
@@ -13333,6 +13898,9 @@ $methodKeys = ['skip_hit','ai_prediction','mcmc_prediction','skai_prediction','h
             <div class="sw-builder-counter" data-sw-counter aria-live="polite">
               Numbers selected: <span data-sw-count-mains>0</span><?php if ($__swHasExtra): ?>&nbsp;&bull;&nbsp;<?php echo htmlspecialchars($__swExtraLabel, ENT_QUOTES); ?>: <span data-sw-count-extras>0</span><?php endif; ?>
             </div>
+            <div style="font-size:0.88rem; color:#576574; margin:0.35rem 0 0.65rem;">
+              Build an actionable pool, then save it to Numbers to Play for reuse and Wheel Builder export.
+            </div>
             <div class="sw-builder-pool" data-sw-pool aria-label="Your strategy numbers">
               <div class="sw-pool-empty" data-sw-pool-empty>Click a candidate above to add numbers here.</div>
             </div>
@@ -13355,7 +13923,7 @@ $methodKeys = ['skip_hit','ai_prediction','mcmc_prediction','skai_prediction','h
               </button>
             </div>
 
-            <!-- Save Strategy Set -->
+            <!-- Save Play Set -->
             <div class="sw-save-section" data-sw-save-section style="display:none;">
               <form method="post" class="sw-save-form" data-sw-save-form>
                 <?php echo \Joomla\CMS\HTML\HTMLHelper::_('form.token'); ?>
@@ -13377,13 +13945,21 @@ $methodKeys = ['skip_hit','ai_prediction','mcmc_prediction','skai_prediction','h
                 <input type="hidden" name="strategy_main_numbers" data-sw-save-mains value="">
                 <input type="hidden" name="strategy_extra_numbers" data-sw-save-extras value="">
                 <input type="hidden" name="strategy_active_sources" data-sw-save-sources value="">
+                <input type="hidden" name="strategy_save_intent" data-sw-save-intent value="play_set">
+                <input type="hidden" name="strategy_origin_source" data-sw-origin-source value="strategy_builder">
                 <div class="sw-save-row">
                   <input type="text" name="strategy_label" class="sw-label-input"
-                          placeholder="Name this strategy (optional)..."
-                          maxlength="80" aria-label="Strategy name">
+                          placeholder="Name this play set (optional)..."
+                          maxlength="80" aria-label="Play set name">
                   <button type="submit" class="sw-btn-primary"
-                          aria-label="Save Strategy Set">
-                    Save Strategy
+                          onclick="this.form.strategy_save_intent.value='play_set';this.form.strategy_origin_source.value='strategy_builder';"
+                          aria-label="Save Play Set">
+                    Save Play Set
+                  </button>
+                  <button type="submit" class="sw-btn-secondary"
+                          onclick="this.form.strategy_save_intent.value='custom_play';this.form.strategy_origin_source.value='manual';"
+                          aria-label="Save Custom Selection">
+                    Save Custom Selection
                   </button>
                 </div>
               </form>
@@ -16316,6 +16892,15 @@ if (!empty($settingLabels)) {
   </button>
 </form>
 
+<form method="post" style="margin-top:.45rem;">
+  <?php echo \Joomla\CMS\HTML\HTMLHelper::_('form.token'); ?>
+  <input type="hidden" name="save_prediction_as_play" value="1">
+  <input type="hidden" name="prediction_set_id" value="<?php echo (int)$s->id; ?>">
+  <button type="submit" class="btn-secondary" style="padding:0.3rem 0.8rem; font-size:.8rem;">
+    Save as Play
+  </button>
+</form>
+
 <form method="post" style="margin-top:.5rem;" data-confirm-submit="Delete this saved prediction?">
   <?php echo \Joomla\CMS\HTML\HTMLHelper::_('form.token'); ?>
 
@@ -16391,6 +16976,119 @@ if (!empty($settingLabels)) {
 
 <?php endif; ?>
 </div>  <!-- end .prediction-panel -->
+
+<style>
+.mle-play-section{margin-top:1.6rem;border:1px solid #dbe3f1;border-radius:16px;background:linear-gradient(180deg,#ffffff 0%,#f8fbff 100%);box-shadow:0 10px 24px rgba(12,43,99,0.06);}
+.mle-play-section__head{padding:1rem 1rem 0.85rem;border-bottom:1px solid #e5ecf7;}
+.mle-play-section__title{margin:0;font-size:1.15rem;font-weight:800;color:#0a1a33;}
+.mle-play-section__sub{margin:0.35rem 0 0;color:#4b5f7f;font-size:0.9rem;line-height:1.5;}
+.mle-play-list{display:grid;gap:0.9rem;padding:1rem;}
+.mle-play-card{border:1px solid #dce6f6;border-radius:14px;background:#fff;padding:0.85rem;}
+.mle-play-top{display:flex;flex-wrap:wrap;align-items:center;gap:0.45rem;margin-bottom:0.5rem;}
+.mle-play-label{font-weight:800;color:#0f274d;}
+.mle-play-badge{display:inline-block;border:1px solid #b7cff8;background:#edf4ff;color:#1d4ed8;border-radius:999px;padding:2px 9px;font-size:0.72rem;font-weight:700;}
+.mle-play-meta{font-size:0.82rem;color:#60708a;}
+.mle-play-row{margin-top:0.35rem;font-size:0.9rem;color:#1e293b;line-height:1.45;}
+.mle-play-actions{display:flex;flex-wrap:wrap;gap:0.45rem;margin-top:0.75rem;align-items:center;}
+.mle-play-actions form{margin:0;}
+.mle-play-input{padding:0.35rem 0.5rem;border:1px solid #cdd8eb;border-radius:8px;font-size:0.78rem;}
+.mle-play-empty{padding:1rem;color:#4b5f7f;font-size:0.92rem;line-height:1.5;}
+@media (max-width:680px){.mle-play-actions{flex-direction:column;align-items:stretch;}.mle-play-actions form{width:100%;}.mle-play-actions button,.mle-play-actions select,.mle-play-actions input{width:100%;}}
+</style>
+
+<div class="mle-play-section" id="numbers-to-play">
+  <div class="mle-play-section__head">
+    <h2 class="mle-play-section__title">Numbers to Play</h2>
+    <p class="mle-play-section__sub">Your approved number sets for reuse, wheeling, and final decision making. Save from predictions, the strategy builder, or manual custom selection, then send to Wheel Builder when you are ready.</p>
+  </div>
+
+  <?php if (!empty($playSets)): ?>
+  <div class="mle-play-list">
+    <?php foreach ($playSets as $__play):
+      $__playMeta = mylottoexpertResolvePlayIntentMeta($__play);
+      $__playBadge = mylottoexpertResolvePlaySourceBadge($__playMeta['origin_source'], $__playMeta['save_intent']);
+      $__playMain = mylottoexpertParseNumberCsv($__play->main_numbers ?? '', true);
+      $__playExtra = mylottoexpertParseNumberCsv($__play->extra_ball_numbers ?? '', true);
+      $__playSavedTs = strtotime((string)($__play->date_saved ?? ''));
+      $__playSavedLabel = $__playSavedTs ? date('M j, Y g:ia', $__playSavedTs) : (string)($__play->date_saved ?? '');
+      $__playDrawTs = strtotime((string)($__play->next_draw_date ?? ''));
+      $__playDrawLabel = $__playDrawTs ? date('M j, Y', $__playDrawTs) : trim((string)($__play->next_draw_date ?? ''));
+      $__playLabel = trim((string)($__play->label ?? '')) !== '' ? trim((string)$__play->label) : ('Play Set #' . (int)$__play->id);
+      $__playWheelCount = (int)($__play->wheel_export_count ?? 0);
+      $__playNotes = trim((string)($__play->play_notes ?? ''));
+    ?>
+    <div class="mle-play-card">
+      <div class="mle-play-top">
+        <span class="mle-play-label"><?php echo htmlspecialchars($__playLabel, ENT_QUOTES, 'UTF-8'); ?></span>
+        <span class="mle-play-badge"><?php echo htmlspecialchars($__playBadge, ENT_QUOTES, 'UTF-8'); ?></span>
+        <?php if (!empty($__playMeta['play_status'])): ?>
+          <span class="mle-play-badge"><?php echo htmlspecialchars(ucfirst($__playMeta['play_status']), ENT_QUOTES, 'UTF-8'); ?></span>
+        <?php endif; ?>
+      </div>
+      <div class="mle-play-meta">
+        <?php echo htmlspecialchars((string)($__play->lottery_name ?? 'Lottery'), ENT_QUOTES, 'UTF-8'); ?>
+        <?php if ($__playDrawLabel !== ''): ?> | Draw: <?php echo htmlspecialchars($__playDrawLabel, ENT_QUOTES, 'UTF-8'); ?><?php endif; ?>
+        <?php if ($__playSavedLabel !== ''): ?> | Saved: <?php echo htmlspecialchars($__playSavedLabel, ENT_QUOTES, 'UTF-8'); ?><?php endif; ?>
+        <?php if ($__playWheelCount > 0): ?> | Sent to Wheel Builder: <?php echo (int)$__playWheelCount; ?><?php endif; ?>
+      </div>
+      <div class="mle-play-row"><strong>Main numbers:</strong> <?php echo htmlspecialchars(!empty($__playMain) ? implode(', ', $__playMain) : '-', ENT_QUOTES, 'UTF-8'); ?></div>
+      <?php if (!empty($__playExtra)): ?>
+      <div class="mle-play-row"><strong>Extra numbers:</strong> <?php echo htmlspecialchars(implode(', ', $__playExtra), ENT_QUOTES, 'UTF-8'); ?></div>
+      <?php endif; ?>
+
+      <div class="mle-play-actions">
+        <form method="post">
+          <?php echo \Joomla\CMS\HTML\HTMLHelper::_('form.token'); ?>
+          <input type="hidden" name="update_play_entry" value="1">
+          <input type="hidden" name="play_set_id" value="<?php echo (int)$__play->id; ?>">
+          <input class="mle-play-input" type="text" name="play_label" maxlength="80" value="<?php echo htmlspecialchars($__playLabel, ENT_QUOTES, 'UTF-8'); ?>" aria-label="Edit play set label">
+          <input class="mle-play-input" type="text" name="play_notes" maxlength="1000" value="<?php echo htmlspecialchars($__playNotes, ENT_QUOTES, 'UTF-8'); ?>" placeholder="Optional notes" aria-label="Edit play notes">
+          <button type="submit" class="btn-secondary" style="font-size:0.78rem;">Edit</button>
+        </form>
+
+        <form method="post">
+          <?php echo \Joomla\CMS\HTML\HTMLHelper::_('form.token'); ?>
+          <input type="hidden" name="duplicate_play_entry" value="1">
+          <input type="hidden" name="play_set_id" value="<?php echo (int)$__play->id; ?>">
+          <button type="submit" class="btn-secondary" style="font-size:0.78rem;">Duplicate</button>
+        </form>
+
+        <form method="post">
+          <?php echo \Joomla\CMS\HTML\HTMLHelper::_('form.token'); ?>
+          <input type="hidden" name="send_play_to_wheel" value="1">
+          <input type="hidden" name="play_set_id" value="<?php echo (int)$__play->id; ?>">
+          <select name="play_system_id" class="mle-play-input" aria-label="Optional wheel system for send action">
+            <option value="0">Select wheel system (optional)</option>
+            <?php foreach ($wheelingSystems as $__wsOpt): ?>
+              <option value="<?php echo (int)($__wsOpt['system_id'] ?? 0); ?>"><?php echo htmlspecialchars((string)($__wsOpt['name'] ?? ('System ' . (int)($__wsOpt['system_id'] ?? 0))), ENT_QUOTES, 'UTF-8'); ?></option>
+            <?php endforeach; ?>
+          </select>
+          <button type="submit" class="btn-primary" style="font-size:0.78rem;">Send to Wheel Builder</button>
+        </form>
+
+        <form method="post">
+          <?php echo \Joomla\CMS\HTML\HTMLHelper::_('form.token'); ?>
+          <input type="hidden" name="archive_play_entry" value="1">
+          <input type="hidden" name="play_set_id" value="<?php echo (int)$__play->id; ?>">
+          <button type="submit" class="btn-secondary" style="font-size:0.78rem;">Archive</button>
+        </form>
+
+        <form method="post" data-confirm-submit="Delete this Numbers to Play entry?">
+          <?php echo \Joomla\CMS\HTML\HTMLHelper::_('form.token'); ?>
+          <input type="hidden" name="delete_play_entry" value="1">
+          <input type="hidden" name="play_set_id" value="<?php echo (int)$__play->id; ?>">
+          <button type="submit" class="btn-danger" style="font-size:0.78rem;">Delete</button>
+        </form>
+      </div>
+    </div>
+    <?php endforeach; ?>
+  </div>
+  <?php else: ?>
+  <div class="mle-play-empty">
+    No Numbers to Play entries yet. Save from a prediction using Save as Play, or build/select numbers in the Strategy Builder and click Save Play Set or Save Custom Selection.
+  </div>
+  <?php endif; ?>
+</div>
 
 <?php
 // Load user's saved settings templates
